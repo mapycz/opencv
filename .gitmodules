@@ -1,3 +1,6 @@
 [submodule "opencv_extra"]
 	path = opencv_extra
 	url = git@github.com:Itseez/opencv_extra.git
+[submodule "opencv_contrib"]
+	path = opencv_contrib
+	url = git@github.com:Itseez/opencv_contrib.git
