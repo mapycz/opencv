@@ -1,0 +1,3 @@
+[submodule "opencv_extra"]
+	path = opencv_extra
+	url = git@github.com:Itseez/opencv_extra.git
