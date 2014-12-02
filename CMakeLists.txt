@@ -1112,4 +1112,29 @@ endif()
 # CPack stuff
 # ----------------------------------------------------------------------------
 
-include(cmake/OpenCVPackaging.cmake)
+#include(cmake/OpenCVPackaging.cmake)
+
+INCLUDE (InstallRequiredSystemLibraries)
+
+SET (CPACK_SET_DESTDIR "on")
+SET (CPACK_PACKAGING_INSTALL_PREFIX "/usr")
+SET (CPACK_GENERATOR "DEB")
+SET (CPACK_PACKAGE_NAME "szn-panorama-opencv")
+
+SET (VERSION 3.0.0)
+SET (CPACK_PACKAGE_VERSION "3.0.0~beta1")
+SET ($ {VERSION} CPACK_DEBIAN_PACKAGE_VERSION)
+SET (CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+SET (CPACK_DEBIAN_PACKAGE_SECTION "graphics")
+SET (CPACK_DEBIAN_ARCHITECTURE $ {CMAKE_SYSTEM_PROCESSOR})
+
+SET (CPACK_PACKAGE_DESCRIPTION "Opencv package for internal usage in Mapy.cz")
+SET (CPACK_PACKAGE_DESCRIPTION_SUMMARY "Build from latest Github sources.")
+SET (CPACK_PACKAGE_CONTACT "vyvoj.ostrava@firma.seznam.cz")
+SET (CPACK_PACKAGE_FILE_NAME "szn-panorama-opencv-3.0.0beta1")
+
+SET(CPACK_DEBIAN_PACKAGE_DEPENDS "libpython2.7, libpthread-stubs0, python-numpy, libjpeg8, python-imaging")
+
+SET (CPACK_COMPONENTS_ALL Libraries ApplicationData)
+
+INCLUDE(CPack Documentation)
