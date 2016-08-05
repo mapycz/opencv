@@ -148,13 +148,13 @@ void CpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
     CV_Assert(features2.descriptors.depth() == CV_8U || features2.descriptors.depth() == CV_32F);
 
 #ifdef HAVE_TEGRA_OPTIMIZATION
-    if (tegra::match2nearest(features1, features2, matches_info, match_conf_))
+    if (tegra::useTegra() && tegra::match2nearest(features1, features2, matches_info, match_conf_))
         return;
 #endif
 
     matches_info.matches.clear();
 
-    Ptr<DescriptorMatcher> matcher;
+    Ptr<cv::DescriptorMatcher> matcher;
 #if 0 // TODO check this
     if (ocl::useOpenCL())
     {
@@ -220,13 +220,17 @@ void GpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
     descriptors1_.upload(features1.descriptors);
     descriptors2_.upload(features2.descriptors);
 
-    BFMatcher_CUDA matcher(NORM_L2);
+    //TODO: NORM_L1 allows to avoid matcher crashes for ORB features, but is not absolutely correct for them.
+    //      The best choice for ORB features is NORM_HAMMING, but it is incorrect for SURF features.
+    //      More accurate fix in this place should be done in the future -- the type of the norm
+    //      should be either a parameter of this method, or a field of the class.
+    Ptr<cuda::DescriptorMatcher> matcher = cuda::DescriptorMatcher::createBFMatcher(NORM_L1);
+
     MatchesSet matches;
 
     // Find 1->2 matches
     pair_matches.clear();
-    matcher.knnMatchSingle(descriptors1_, descriptors2_, train_idx_, distance_, all_dist_, 2);
-    matcher.knnMatchDownload(train_idx_, distance_, pair_matches);
+    matcher->knnMatch(descriptors1_, descriptors2_, pair_matches, 2);
     for (size_t i = 0; i < pair_matches.size(); ++i)
     {
         if (pair_matches[i].size() < 2)
@@ -242,8 +246,7 @@ void GpuMatcher::match(const ImageFeatures &features1, const ImageFeatures &feat
 
     // Find 2->1 matches
     pair_matches.clear();
-    matcher.knnMatchSingle(descriptors2_, descriptors1_, train_idx_, distance_, all_dist_, 2);
-    matcher.knnMatchDownload(train_idx_, distance_, pair_matches);
+    matcher->knnMatch(descriptors2_, descriptors1_, pair_matches, 2);
     for (size_t i = 0; i < pair_matches.size(); ++i)
     {
         if (pair_matches[i].size() < 2)

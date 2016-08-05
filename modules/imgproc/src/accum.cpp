@@ -12,6 +12,7 @@
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2014, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 /
 // Redistribution and use in source and binary forms, with or without modification,
@@ -81,6 +82,1370 @@ struct AccW_SIMD
         return 0;
     }
 };
+
+#if CV_AVX
+template <>
+struct Acc_SIMD<float, float>
+{
+    int operator() (const float * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8 ; x += 8)
+            {
+                __m256 v_src = _mm256_loadu_ps(src + x);
+                __m256 v_dst = _mm256_loadu_ps(dst + x);
+                v_dst = _mm256_add_ps(v_src, v_dst);
+                _mm256_storeu_ps(dst + x, v_dst);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<float, double>
+{
+    int operator() (const float * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8 ; x += 8)
+            {
+                __m256 v_src = _mm256_loadu_ps(src + x);
+                __m256d v_src0 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src,0));
+                __m256d v_src1 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src,1));
+                __m256d v_dst0 = _mm256_loadu_pd(dst + x);
+                __m256d v_dst1 = _mm256_loadu_pd(dst + x + 4);
+                v_dst0 = _mm256_add_pd(v_src0, v_dst0);
+                v_dst1 = _mm256_add_pd(v_src1, v_dst1);
+                _mm256_storeu_pd(dst + x, v_dst0);
+                _mm256_storeu_pd(dst + x + 4, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<double, double>
+{
+    int operator() (const double * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m256d v_src = _mm256_loadu_pd(src + x);
+                __m256d v_dst = _mm256_loadu_pd(dst + x);
+
+                v_dst = _mm256_add_pd(v_dst, v_src);
+                _mm256_storeu_pd(dst + x, v_dst);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<float, float>
+{
+    int operator() (const float * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8 ; x += 8)
+            {
+                __m256 v_src = _mm256_loadu_ps(src + x);
+                __m256 v_dst = _mm256_loadu_ps(dst + x);
+
+                v_src = _mm256_mul_ps(v_src, v_src);
+                v_dst = _mm256_add_ps(v_src, v_dst);
+                _mm256_storeu_ps(dst + x, v_dst);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<float, double>
+{
+    int operator() (const float * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8 ; x += 8)
+            {
+                __m256 v_src = _mm256_loadu_ps(src + x);
+                __m256d v_src0 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src,0));
+                __m256d v_src1 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src,1));
+                __m256d v_dst0 = _mm256_loadu_pd(dst + x);
+                __m256d v_dst1 = _mm256_loadu_pd(dst + x + 4);
+
+                v_src0 = _mm256_mul_pd(v_src0, v_src0);
+                v_src1 = _mm256_mul_pd(v_src1, v_src1);
+                v_dst0 = _mm256_add_pd(v_src0, v_dst0);
+                v_dst1 = _mm256_add_pd(v_src1, v_dst1);
+                _mm256_storeu_pd(dst + x, v_dst0);
+                _mm256_storeu_pd(dst + x + 4, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<double, double>
+{
+    int operator() (const double * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m256d v_src = _mm256_loadu_pd(src + x);
+                __m256d v_dst = _mm256_loadu_pd(dst + x);
+
+                v_src = _mm256_mul_pd(v_src, v_src);
+                v_dst = _mm256_add_pd(v_dst, v_src);
+                _mm256_storeu_pd(dst + x, v_dst);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<float, float>
+{
+    int operator() (const float * src1, const float * src2, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m256 v_src0 = _mm256_loadu_ps(src1 + x);
+                __m256 v_src1 = _mm256_loadu_ps(src2 + x);
+                __m256 v_dst = _mm256_loadu_ps(dst + x);
+                __m256 v_src = _mm256_mul_ps(v_src0, v_src1);
+
+                v_dst = _mm256_add_ps(v_src, v_dst);
+                _mm256_storeu_ps(dst + x, v_dst);
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<float, double>
+{
+    int operator() (const float * src1, const float * src2, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m256 v_1src = _mm256_loadu_ps(src1 + x);
+                __m256 v_2src = _mm256_loadu_ps(src2 + x);
+                __m256d v_src00 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_1src,0));
+                __m256d v_src01 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_1src,1));
+                __m256d v_src10 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_2src,0));
+                __m256d v_src11 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_2src,1));
+                __m256d v_dst0 = _mm256_loadu_pd(dst + x);
+                __m256d v_dst1 = _mm256_loadu_pd(dst + x + 4);
+
+                __m256d v_src0 = _mm256_mul_pd(v_src00, v_src10);
+                __m256d v_src1 = _mm256_mul_pd(v_src01, v_src11);
+                v_dst0 = _mm256_add_pd(v_src0, v_dst0);
+                v_dst1 = _mm256_add_pd(v_src1, v_dst1);
+                _mm256_storeu_pd(dst + x, v_dst0);
+                _mm256_storeu_pd(dst + x + 4, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<double, double>
+{
+    int operator() (const double * src1, const double * src2, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m256d v_src0 = _mm256_loadu_pd(src1 + x);
+                __m256d v_src1 = _mm256_loadu_pd(src2 + x);
+                __m256d v_dst = _mm256_loadu_pd(dst + x);
+
+                v_src0 = _mm256_mul_pd(v_src0, v_src1);
+                v_dst = _mm256_add_pd(v_dst, v_src0);
+                _mm256_storeu_pd(dst + x, v_dst);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<float, float>
+{
+    int operator() (const float * src, float * dst, const uchar * mask, int len, int cn, float alpha) const
+    {
+        int x = 0;
+        __m256 v_alpha = _mm256_set1_ps(alpha);
+        __m256 v_beta = _mm256_set1_ps(1.0f - alpha);
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 16; x += 16)
+            {
+                _mm256_storeu_ps(dst + x, _mm256_add_ps(_mm256_mul_ps(_mm256_loadu_ps(dst + x), v_beta), _mm256_mul_ps(_mm256_loadu_ps(src + x), v_alpha)));
+                _mm256_storeu_ps(dst + x + 8, _mm256_add_ps(_mm256_mul_ps(_mm256_loadu_ps(dst + x + 8), v_beta), _mm256_mul_ps(_mm256_loadu_ps(src + x + 8), v_alpha)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<float, double>
+{
+    int operator() (const float * src, double * dst, const uchar * mask, int len, int cn, double alpha) const
+    {
+        int x = 0;
+        __m256d v_alpha = _mm256_set1_pd(alpha);
+        __m256d v_beta = _mm256_set1_pd(1.0f - alpha);
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m256 v_src0 = _mm256_loadu_ps(src + x);
+                __m256 v_src1 = _mm256_loadu_ps(src + x + 8);
+                __m256d v_src00 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src0,0));
+                __m256d v_src01 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src0,1));
+                __m256d v_src10 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src1,0));
+                __m256d v_src11 = _mm256_cvtps_pd(_mm256_extractf128_ps(v_src1,1));
+
+                _mm256_storeu_pd(dst + x, _mm256_add_pd(_mm256_mul_pd(_mm256_loadu_pd(dst + x), v_beta), _mm256_mul_pd(v_src00, v_alpha)));
+                _mm256_storeu_pd(dst + x + 4, _mm256_add_pd(_mm256_mul_pd(_mm256_loadu_pd(dst + x + 4), v_beta), _mm256_mul_pd(v_src01, v_alpha)));
+                _mm256_storeu_pd(dst + x + 8, _mm256_add_pd(_mm256_mul_pd(_mm256_loadu_pd(dst + x + 8), v_beta), _mm256_mul_pd(v_src10, v_alpha)));
+                _mm256_storeu_pd(dst + x + 12, _mm256_add_pd(_mm256_mul_pd(_mm256_loadu_pd(dst + x + 12), v_beta), _mm256_mul_pd(v_src11, v_alpha)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<double, double>
+{
+    int operator() (const double * src, double * dst, const uchar * mask, int len, int cn, double alpha) const
+    {
+        int x = 0;
+        __m256d v_alpha = _mm256_set1_pd(alpha);
+        __m256d v_beta = _mm256_set1_pd(1.0f - alpha);
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m256d v_src0 = _mm256_loadu_pd(src + x);
+                __m256d v_src1 = _mm256_loadu_pd(src + x + 4);
+
+                _mm256_storeu_pd(dst + x, _mm256_add_pd(_mm256_mul_pd(_mm256_loadu_pd(dst + x), v_beta), _mm256_mul_pd(v_src0, v_alpha)));
+                _mm256_storeu_pd(dst + x + 4, _mm256_add_pd(_mm256_mul_pd(_mm256_loadu_pd(dst + x + 4), v_beta), _mm256_mul_pd(v_src1, v_alpha)));
+            }
+        }
+
+        return x;
+    }
+};
+#elif CV_SSE2
+template <>
+struct Acc_SIMD<float, float>
+{
+    int operator() (const float * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), _mm_loadu_ps(src + x)));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_loadu_ps(src + x + 4)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<float, double>
+{
+    int operator() (const float * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128 v_src = _mm_loadu_ps(src + x);
+                __m128d v_src0 = _mm_cvtps_pd(v_src);
+                __m128d v_src1 = _mm_cvtps_pd(_mm_shuffle_ps(v_src, v_src, _MM_SHUFFLE(1, 0, 3, 2)));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<double, double>
+{
+    int operator() (const double * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128d v_src0 = _mm_loadu_pd(src + x);
+                __m128d v_src1 = _mm_loadu_pd(src + x + 2);
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<float, float>
+{
+    int operator() (const float * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128 v_src0 = _mm_loadu_ps(src + x);
+                __m128 v_src1 = _mm_loadu_ps(src + x + 4);
+                v_src0 = _mm_mul_ps(v_src0, v_src0);
+                v_src1 = _mm_mul_ps(v_src1, v_src1);
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), v_src0));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), v_src1));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<float, double>
+{
+    int operator() (const float * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128 v_src = _mm_loadu_ps(src + x);
+                __m128d v_src0 = _mm_cvtps_pd(v_src);
+                __m128d v_src1 = _mm_cvtps_pd(_mm_shuffle_ps(v_src, v_src, _MM_SHUFFLE(1, 0, 3, 2)));
+                v_src0 = _mm_mul_pd(v_src0, v_src0);
+                v_src1 = _mm_mul_pd(v_src1, v_src1);
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<double, double>
+{
+    int operator() (const double * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128d v_src0 = _mm_loadu_pd(src + x);
+                __m128d v_src1 = _mm_loadu_pd(src + x + 2);
+                v_src0 = _mm_mul_pd(v_src0, v_src0);
+                v_src1 = _mm_mul_pd(v_src1, v_src1);
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<float, float>
+{
+    int operator() (const float * src1, const float * src2, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), _mm_mul_ps(_mm_loadu_ps(src1 + x), _mm_loadu_ps(src2 + x))));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_mul_ps(_mm_loadu_ps(src1 + x + 4), _mm_loadu_ps(src2 + x + 4))));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<float, double>
+{
+    int operator() (const float * src1, const float * src2, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128 v_1src  = _mm_loadu_ps(src1 + x);
+                __m128 v_2src  = _mm_loadu_ps(src2 + x);
+
+                __m128d v_1src0 = _mm_cvtps_pd(v_1src);
+                __m128d v_1src1 = _mm_cvtps_pd(_mm_shuffle_ps(v_1src, v_1src, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_2src0 = _mm_cvtps_pd(v_2src);
+                __m128d v_2src1 = _mm_cvtps_pd(_mm_shuffle_ps(v_2src, v_2src, _MM_SHUFFLE(0, 0, 3, 2)));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+
+                v_dst0 = _mm_add_pd(v_dst0, _mm_mul_pd(v_1src0, v_2src0));
+                v_dst1 = _mm_add_pd(v_dst1, _mm_mul_pd(v_1src1, v_2src1));
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<double, double>
+{
+    int operator() (const double * src1, const double * src2, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128d v_src00 = _mm_loadu_pd(src1 + x);
+                __m128d v_src01 = _mm_loadu_pd(src1 + x + 2);
+                __m128d v_src10 = _mm_loadu_pd(src2 + x);
+                __m128d v_src11 = _mm_loadu_pd(src2 + x + 2);
+                __m128d v_src0 = _mm_mul_pd(v_src00, v_src10);
+                __m128d v_src1 = _mm_mul_pd(v_src01, v_src11);
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<float, float>
+{
+    int operator() (const float * src, float * dst, const uchar * mask, int len, int cn, float alpha) const
+    {
+        int x = 0;
+        __m128 v_alpha = _mm_set1_ps(alpha);
+        __m128 v_beta = _mm_set1_ps(1.0f - alpha);
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(dst + x), v_beta), _mm_mul_ps(_mm_loadu_ps(src + x), v_alpha)));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_mul_ps(_mm_loadu_ps(dst + x + 4), v_beta), _mm_mul_ps(_mm_loadu_ps(src + x + 4), v_alpha)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<float, double>
+{
+    int operator() (const float * src, double * dst, const uchar * mask, int len, int cn, double alpha) const
+    {
+        int x = 0;
+        __m128d v_alpha = _mm_set1_pd(alpha);
+        __m128d v_beta = _mm_set1_pd(1.0f - alpha);
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128 v_src0 = _mm_loadu_ps(src + x);
+                __m128 v_src1 = _mm_loadu_ps(src + x + 4);
+                __m128d v_src00 = _mm_cvtps_pd(v_src0);
+                __m128d v_src01 = _mm_cvtps_pd(_mm_shuffle_ps(v_src0, v_src0, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src10 = _mm_cvtps_pd(v_src1);
+                __m128d v_src11 = _mm_cvtps_pd(_mm_shuffle_ps(v_src1, v_src1, _MM_SHUFFLE(0, 0, 3, 2)));
+
+                _mm_storeu_pd(dst + x, _mm_add_pd(_mm_mul_pd(_mm_loadu_pd(dst + x), v_beta), _mm_mul_pd(v_src00, v_alpha)));
+                _mm_storeu_pd(dst + x + 2, _mm_add_pd(_mm_mul_pd(_mm_loadu_pd(dst + x + 2), v_beta), _mm_mul_pd(v_src01, v_alpha)));
+                _mm_storeu_pd(dst + x + 4, _mm_add_pd(_mm_mul_pd(_mm_loadu_pd(dst + x + 4), v_beta), _mm_mul_pd(v_src10, v_alpha)));
+                _mm_storeu_pd(dst + x + 6, _mm_add_pd(_mm_mul_pd(_mm_loadu_pd(dst + x + 6), v_beta), _mm_mul_pd(v_src11, v_alpha)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<double, double>
+{
+    int operator() (const double * src, double * dst, const uchar * mask, int len, int cn, double alpha) const
+    {
+        int x = 0;
+        __m128d v_alpha = _mm_set1_pd(alpha);
+        __m128d v_beta = _mm_set1_pd(1.0f - alpha);
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 4; x += 4)
+            {
+                __m128d v_src0 = _mm_loadu_pd(src + x);
+                __m128d v_src1 = _mm_loadu_pd(src + x + 2);
+
+                _mm_storeu_pd(dst + x, _mm_add_pd(_mm_mul_pd(_mm_loadu_pd(dst + x), v_beta), _mm_mul_pd(v_src0, v_alpha)));
+                _mm_storeu_pd(dst + x + 2, _mm_add_pd(_mm_mul_pd(_mm_loadu_pd(dst + x + 2), v_beta), _mm_mul_pd(v_src1, v_alpha)));
+            }
+        }
+
+        return x;
+    }
+};
+#endif
+
+#if CV_SSE2
+template <>
+struct Acc_SIMD<uchar, float>
+{
+    int operator() (const uchar * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_src  = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_src0 = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi8(v_src, v_0);
+
+                _mm_storeu_ps(dst + x,  _mm_add_ps(_mm_loadu_ps(dst + x), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 4,  _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 8,  _mm_add_ps(_mm_loadu_ps(dst + x + 8), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0))));
+                _mm_storeu_ps(dst + x + 12,  _mm_add_ps(_mm_loadu_ps(dst + x + 12), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0))));
+            }
+        }
+        else if (cn == 1)
+        {
+            __m128i v_255 = _mm_set1_epi8(-1);
+
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_src = _mm_and_si128(_mm_loadu_si128((const __m128i*)(src + x)), _mm_xor_si128(v_255, _mm_cmpeq_epi8(_mm_loadu_si128((const __m128i*)(mask + x)), v_0)));
+                __m128i v_src0 = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi8(v_src, v_0);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 8, _mm_add_ps(_mm_loadu_ps(dst + x + 8), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0))));
+                _mm_storeu_ps(dst + x + 12, _mm_add_ps(_mm_loadu_ps(dst + x + 12), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0))));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<ushort, float>
+{
+    int operator() (const ushort * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_src0 = _mm_unpacklo_epi16(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi16(v_src, v_0);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), _mm_cvtepi32_ps(v_src0)));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_cvtepi32_ps(v_src1)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<uchar, double>
+{
+    int operator() (const uchar * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            __m128i v_0 = _mm_setzero_si128();
+            len *= cn;
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_src  = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_int0 = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_int1 = _mm_unpackhi_epi8(v_src, v_0);
+                __m128i v_int00 = _mm_unpacklo_epi16(v_int0, v_0);
+                __m128i v_int01 = _mm_unpackhi_epi16(v_int0, v_0);
+                __m128i v_int10 = _mm_unpacklo_epi16(v_int1, v_0);
+                __m128i v_int11 = _mm_unpackhi_epi16(v_int1, v_0);
+                __m128d v_src0 = _mm_cvtepi32_pd(v_int00);
+                __m128d v_src1 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int00, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src2 = _mm_cvtepi32_pd(v_int01);
+                __m128d v_src3 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int01, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src4 = _mm_cvtepi32_pd(v_int10);
+                __m128d v_src5 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int10, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src6 = _mm_cvtepi32_pd(v_int11);
+                __m128d v_src7 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int11, _MM_SHUFFLE(0, 0, 3, 2)));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+                __m128d v_dst4 = _mm_loadu_pd(dst + x + 8);
+                __m128d v_dst5 = _mm_loadu_pd(dst + x + 10);
+                __m128d v_dst6 = _mm_loadu_pd(dst + x + 12);
+                __m128d v_dst7 = _mm_loadu_pd(dst + x + 14);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                v_dst2 = _mm_add_pd(v_dst2, v_src2);
+                v_dst3 = _mm_add_pd(v_dst3, v_src3);
+                v_dst4 = _mm_add_pd(v_dst4, v_src4);
+                v_dst5 = _mm_add_pd(v_dst5, v_src5);
+                v_dst6 = _mm_add_pd(v_dst6, v_src6);
+                v_dst7 = _mm_add_pd(v_dst7, v_src7);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+                _mm_storeu_pd(dst + x + 8, v_dst4);
+                _mm_storeu_pd(dst + x + 10, v_dst5);
+                _mm_storeu_pd(dst + x + 12, v_dst6);
+                _mm_storeu_pd(dst + x + 14, v_dst7);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct Acc_SIMD<ushort, double>
+{
+    int operator() (const ushort * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            __m128i v_0 = _mm_setzero_si128();
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src  = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_int0 = _mm_unpacklo_epi16(v_src, v_0);
+                __m128i v_int1 = _mm_unpackhi_epi16(v_src, v_0);
+                __m128d v_src0 = _mm_cvtepi32_pd(v_int0);
+                __m128d v_src1 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int0, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src2 = _mm_cvtepi32_pd(v_int1);
+                __m128d v_src3 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int1, _MM_SHUFFLE(0, 0, 3, 2)));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                v_dst2 = _mm_add_pd(v_dst2, v_src2);
+                v_dst3 = _mm_add_pd(v_dst3, v_src3);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<uchar, float>
+{
+    int operator() (const uchar * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_src  = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_src0 = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi8(v_src, v_0);
+                v_src0 = _mm_mullo_epi16(v_src0, v_src0);
+                v_src1 = _mm_mullo_epi16(v_src1, v_src1);
+
+                _mm_storeu_ps(dst + x,  _mm_add_ps(_mm_loadu_ps(dst + x), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 4,  _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 8,  _mm_add_ps(_mm_loadu_ps(dst + x + 8), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0))));
+                _mm_storeu_ps(dst + x + 12,  _mm_add_ps(_mm_loadu_ps(dst + x + 12), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0))));
+            }
+        }
+        else if (cn == 1)
+        {
+
+            __m128i v_255 = _mm_set1_epi8(-1);
+            for ( ; x <= len - 16; x += 16)
+            {
+
+                __m128i v_src = _mm_and_si128(_mm_loadu_si128((const __m128i*)(src + x)), _mm_xor_si128(v_255, _mm_cmpeq_epi8(_mm_loadu_si128((const __m128i*)(mask + x)), v_0)));
+                __m128i v_src0 = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi8(v_src, v_0);
+                v_src0 = _mm_mullo_epi16(v_src0, v_src0);
+                v_src1 = _mm_mullo_epi16(v_src1, v_src1);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0))));
+                _mm_storeu_ps(dst + x + 8, _mm_add_ps(_mm_loadu_ps(dst + x + 8), _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0))));
+                _mm_storeu_ps(dst + x + 12, _mm_add_ps(_mm_loadu_ps(dst + x + 12), _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0))));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<ushort, float>
+{
+    int operator() (const ushort * src, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_src0 = _mm_unpacklo_epi16(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi16(v_src, v_0);
+                v_src0 = _mm_mullo_epi16(v_src0, v_src0);
+                v_src1 = _mm_mullo_epi16(v_src1, v_src1);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), _mm_cvtepi32_ps(v_src0)));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), _mm_cvtepi32_ps(v_src1)));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<uchar, double>
+{
+    int operator() (const uchar * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            __m128i v_0 = _mm_setzero_si128();
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src = _mm_loadl_epi64((const __m128i*)(src + x));
+                __m128i v_int = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_int0 = _mm_unpacklo_epi16(v_int, v_0);
+                __m128i v_int1 = _mm_unpackhi_epi16(v_int, v_0);
+                __m128d v_src0 = _mm_cvtepi32_pd(v_int0);
+                __m128d v_src1 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int0, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src2 = _mm_cvtepi32_pd(v_int1);
+                __m128d v_src3 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int1, _MM_SHUFFLE(0, 0, 3, 2)));
+                v_src0 = _mm_mul_pd(v_src0, v_src0);
+                v_src1 = _mm_mul_pd(v_src1, v_src1);
+                v_src2 = _mm_mul_pd(v_src2, v_src2);
+                v_src3 = _mm_mul_pd(v_src3, v_src3);
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                v_dst2 = _mm_add_pd(v_dst2, v_src2);
+                v_dst3 = _mm_add_pd(v_dst3, v_src3);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccSqr_SIMD<ushort, double>
+{
+    int operator() (const ushort * src, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            __m128i v_0 = _mm_setzero_si128();
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src  = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_int0 = _mm_unpacklo_epi16(v_src, v_0);
+                __m128i v_int1 = _mm_unpackhi_epi16(v_src, v_0);
+                __m128d v_src0 = _mm_cvtepi32_pd(v_int0);
+                __m128d v_src1 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int0, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src2 = _mm_cvtepi32_pd(v_int1);
+                __m128d v_src3 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int1, _MM_SHUFFLE(0, 0, 3, 2)));
+                v_src0 = _mm_mul_pd(v_src0, v_src0);
+                v_src1 = _mm_mul_pd(v_src1, v_src1);
+                v_src2 = _mm_mul_pd(v_src2, v_src2);
+                v_src3 = _mm_mul_pd(v_src3, v_src3);
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                v_dst2 = _mm_add_pd(v_dst2, v_src2);
+                v_dst3 = _mm_add_pd(v_dst3, v_src3);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<uchar, float>
+{
+    int operator() (const uchar * src1, const uchar * src2, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        __m128i v_0 = _mm_setzero_si128();
+        len *= cn;
+        if (!mask)
+        {
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_1src = _mm_loadu_si128((const __m128i*)(src1 + x));
+                __m128i v_2src = _mm_loadu_si128((const __m128i*)(src2 + x));
+
+                __m128i v_1src0 = _mm_unpacklo_epi8(v_1src, v_0);
+                __m128i v_1src1 = _mm_unpackhi_epi8(v_1src, v_0);
+                __m128i v_2src0 = _mm_unpacklo_epi8(v_2src, v_0);
+                __m128i v_2src1 = _mm_unpackhi_epi8(v_2src, v_0);
+                __m128i v_src0 = _mm_mullo_epi16(v_1src0, v_2src0);
+                __m128i v_src1 = _mm_mullo_epi16(v_1src1, v_2src1);
+                __m128 v_src00 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0));
+                __m128 v_src01 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0));
+                __m128 v_src10 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0));
+                __m128 v_src11 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0));
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), v_src00));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), v_src01));
+                _mm_storeu_ps(dst + x + 8, _mm_add_ps(_mm_loadu_ps(dst + x + 8), v_src10));
+                _mm_storeu_ps(dst + x + 12, _mm_add_ps(_mm_loadu_ps(dst + x + 12), v_src11));
+            }
+        }
+        else if (cn == 1)
+        {
+            __m128i v_255 = _mm_set1_epi8(-1);
+
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_mask = _mm_loadu_si128((const __m128i*)(mask + x));
+                v_mask = _mm_xor_si128(v_255, _mm_cmpeq_epi8(v_mask, v_0));
+                __m128i v_1src = _mm_and_si128(_mm_loadu_si128((const __m128i*)(src1 + x)), v_mask);
+                __m128i v_2src = _mm_and_si128(_mm_loadu_si128((const __m128i*)(src2 + x)), v_mask);
+
+                __m128i v_1src0 = _mm_unpacklo_epi8(v_1src, v_0);
+                __m128i v_1src1 = _mm_unpackhi_epi8(v_1src, v_0);
+                __m128i v_2src0 = _mm_unpacklo_epi8(v_2src, v_0);
+                __m128i v_2src1 = _mm_unpackhi_epi8(v_2src, v_0);
+                __m128i v_src0 = _mm_mullo_epi16(v_1src0, v_2src0);
+                __m128i v_src1 = _mm_mullo_epi16(v_1src1, v_2src1);
+                __m128 v_src00 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0));
+                __m128 v_src01 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0));
+                __m128 v_src10 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0));
+                __m128 v_src11 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0));
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), v_src00));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), v_src01));
+                _mm_storeu_ps(dst + x + 8, _mm_add_ps(_mm_loadu_ps(dst + x + 8), v_src10));
+                _mm_storeu_ps(dst + x + 12, _mm_add_ps(_mm_loadu_ps(dst + x + 12), v_src11));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<ushort, float>
+{
+    int operator() (const ushort * src1, const ushort * src2, float * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_1src = _mm_loadu_si128((const __m128i*)(src1 + x));
+                __m128i v_2src = _mm_loadu_si128((const __m128i*)(src2 + x));
+                __m128 v_1src0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_1src, v_0));
+                __m128 v_1src1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_1src, v_0));
+                __m128 v_2src0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_2src, v_0));
+                __m128 v_2src1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_2src, v_0));
+                __m128 v_src0 = _mm_mul_ps(v_1src0, v_2src0);
+                __m128 v_src1 = _mm_mul_ps(v_1src1, v_2src1);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), v_src0));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), v_src1));
+            }
+        }
+        else if (cn == 1)
+        {
+            __m128i v_65535 = _mm_set1_epi16(-1);
+
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_mask = _mm_loadl_epi64((const __m128i*)(mask + x));
+                __m128i v_mask0 = _mm_unpacklo_epi8(v_mask, v_0);
+                v_mask0 = _mm_xor_si128(v_65535, _mm_cmpeq_epi16(v_mask0, v_0));
+
+                __m128i v_1src = _mm_and_si128(_mm_loadu_si128((const __m128i*)(src1 + x)), v_mask0);
+                __m128i v_2src = _mm_and_si128(_mm_loadu_si128((const __m128i*)(src2 + x)), v_mask0);
+                __m128 v_1src0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_1src, v_0));
+                __m128 v_1src1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_1src, v_0));
+                __m128 v_2src0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_2src, v_0));
+                __m128 v_2src1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_2src, v_0));
+                __m128 v_src0 = _mm_mul_ps(v_1src0, v_2src0);
+                __m128 v_src1 = _mm_mul_ps(v_1src1, v_2src1);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(_mm_loadu_ps(dst + x), v_src0));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(_mm_loadu_ps(dst + x + 4), v_src1));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<uchar, double>
+{
+    int operator() (const uchar * src1, const uchar * src2, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            __m128i v_0 = _mm_setzero_si128();
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_1src  = _mm_loadl_epi64((const __m128i*)(src1 + x));
+                __m128i v_2src  = _mm_loadl_epi64((const __m128i*)(src2 + x));
+
+                __m128i v_1int = _mm_unpacklo_epi8(v_1src, v_0);
+                __m128i v_2int = _mm_unpacklo_epi8(v_2src, v_0);
+                __m128i v_1int0 = _mm_unpacklo_epi16(v_1int, v_0);
+                __m128i v_1int1 = _mm_unpackhi_epi16(v_1int, v_0);
+                __m128i v_2int0 = _mm_unpacklo_epi16(v_2int, v_0);
+                __m128i v_2int1 = _mm_unpackhi_epi16(v_2int, v_0);
+                __m128d v_src0 = _mm_mul_pd(_mm_cvtepi32_pd(v_1int0),_mm_cvtepi32_pd(v_2int0));
+                __m128d v_src1 = _mm_mul_pd(_mm_cvtepi32_pd(_mm_shuffle_epi32(v_1int0, _MM_SHUFFLE(0, 0, 3, 2))),_mm_cvtepi32_pd(_mm_shuffle_epi32(v_2int0, _MM_SHUFFLE(0, 0, 3, 2))));
+                __m128d v_src2 = _mm_mul_pd(_mm_cvtepi32_pd(v_1int1),_mm_cvtepi32_pd(v_2int1));
+                __m128d v_src3 = _mm_mul_pd(_mm_cvtepi32_pd(_mm_shuffle_epi32(v_1int1, _MM_SHUFFLE(0, 0, 3, 2))),_mm_cvtepi32_pd(_mm_shuffle_epi32(v_2int1, _MM_SHUFFLE(0, 0, 3, 2))));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                v_dst2 = _mm_add_pd(v_dst2, v_src2);
+                v_dst3 = _mm_add_pd(v_dst3, v_src3);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccProd_SIMD<ushort, double>
+{
+    int operator() (const ushort * src1, const ushort * src2, double * dst, const uchar * mask, int len, int cn) const
+    {
+        int x = 0;
+
+        if (!mask)
+        {
+            __m128i v_0 = _mm_setzero_si128();
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_1src  = _mm_loadu_si128((const __m128i*)(src1 + x));
+                __m128i v_2src  = _mm_loadu_si128((const __m128i*)(src2 + x));
+                __m128i v_1int0 = _mm_unpacklo_epi16(v_1src, v_0);
+                __m128i v_1int1 = _mm_unpackhi_epi16(v_1src, v_0);
+                __m128i v_2int0 = _mm_unpacklo_epi16(v_2src, v_0);
+                __m128i v_2int1 = _mm_unpackhi_epi16(v_2src, v_0);
+                __m128d v_src0 = _mm_mul_pd(_mm_cvtepi32_pd(v_1int0),_mm_cvtepi32_pd(v_2int0));
+                __m128d v_src1 = _mm_mul_pd(_mm_cvtepi32_pd(_mm_shuffle_epi32(v_1int0, _MM_SHUFFLE(0, 0, 3, 2))),_mm_cvtepi32_pd(_mm_shuffle_epi32(v_2int0, _MM_SHUFFLE(0, 0, 3, 2))));
+                __m128d v_src2 = _mm_mul_pd(_mm_cvtepi32_pd(v_1int1),_mm_cvtepi32_pd(v_2int1));
+                __m128d v_src3 = _mm_mul_pd(_mm_cvtepi32_pd(_mm_shuffle_epi32(v_1int1, _MM_SHUFFLE(0, 0, 3, 2))),_mm_cvtepi32_pd(_mm_shuffle_epi32(v_2int1, _MM_SHUFFLE(0, 0, 3, 2))));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst0 = _mm_add_pd(v_dst0, v_src0);
+                v_dst1 = _mm_add_pd(v_dst1, v_src1);
+                v_dst2 = _mm_add_pd(v_dst2, v_src2);
+                v_dst3 = _mm_add_pd(v_dst3, v_src3);
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+            }
+        }
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<uchar, float>
+{
+    int operator() (const uchar * src, float * dst, const uchar * mask, int len, int cn, float alpha) const
+    {
+        int x = 0;
+        __m128 v_alpha = _mm_set1_ps(alpha);
+        __m128 v_beta = _mm_set1_ps(1.0f - alpha);
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 16; x += 16)
+            {
+                __m128i v_src = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_src0 = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_src1 = _mm_unpackhi_epi8(v_src, v_0);
+                __m128 v_src00 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src0, v_0));
+                __m128 v_src01 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src0, v_0));
+                __m128 v_src10 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src1, v_0));
+                __m128 v_src11 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src1, v_0));
+
+                __m128 v_dst00 = _mm_loadu_ps(dst + x);
+                __m128 v_dst01 = _mm_loadu_ps(dst + x + 4);
+                __m128 v_dst10 = _mm_loadu_ps(dst + x + 8);
+                __m128 v_dst11 = _mm_loadu_ps(dst + x + 12);
+
+                v_dst00 = _mm_add_ps(_mm_mul_ps(v_dst00, v_beta), _mm_mul_ps(v_src00, v_alpha));
+                v_dst01 = _mm_add_ps(_mm_mul_ps(v_dst01, v_beta), _mm_mul_ps(v_src01, v_alpha));
+                v_dst10 = _mm_add_ps(_mm_mul_ps(v_dst10, v_beta), _mm_mul_ps(v_src10, v_alpha));
+                v_dst11 = _mm_add_ps(_mm_mul_ps(v_dst11, v_beta), _mm_mul_ps(v_src11, v_alpha));
+
+                _mm_storeu_ps(dst + x, v_dst00);
+                _mm_storeu_ps(dst + x + 4, v_dst01);
+                _mm_storeu_ps(dst + x + 8, v_dst10);
+                _mm_storeu_ps(dst + x + 12, v_dst11);
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<ushort, float>
+{
+    int operator() (const ushort * src, float * dst, const uchar * mask, int len, int cn, float alpha) const
+    {
+        int x = 0;
+        __m128 v_alpha = _mm_set1_ps(alpha);
+        __m128 v_beta = _mm_set1_ps(1.0f - alpha);
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128 v_src0 = _mm_cvtepi32_ps(_mm_unpacklo_epi16(v_src, v_0));
+                __m128 v_src1 = _mm_cvtepi32_ps(_mm_unpackhi_epi16(v_src, v_0));
+                v_src0 = _mm_mul_ps(v_src0, v_alpha);
+                v_src1 = _mm_mul_ps(v_src1, v_alpha);
+
+                __m128 v_dst0 = _mm_mul_ps(_mm_loadu_ps(dst + x), v_beta);
+                __m128 v_dst1 = _mm_mul_ps(_mm_loadu_ps(dst + x + 4), v_beta);
+
+                _mm_storeu_ps(dst + x, _mm_add_ps(v_dst0, v_src0));
+                _mm_storeu_ps(dst + x + 4, _mm_add_ps(v_dst1, v_src1));
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<uchar, double>
+{
+    int operator() (const uchar * src, double * dst, const uchar * mask, int len, int cn, double alpha) const
+    {
+        int x = 0;
+        __m128d v_alpha = _mm_set1_pd(alpha);
+        __m128d v_beta = _mm_set1_pd(1.0f - alpha);
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src = _mm_loadl_epi64((const __m128i*)(src + x));
+                __m128i v_int = _mm_unpacklo_epi8(v_src, v_0);
+                __m128i v_int0 = _mm_unpacklo_epi16(v_int, v_0);
+                __m128i v_int1 = _mm_unpackhi_epi16(v_int, v_0);
+                __m128d v_src0 = _mm_cvtepi32_pd(v_int0);
+                __m128d v_src1 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int0, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src2 = _mm_cvtepi32_pd(v_int1);
+                __m128d v_src3 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int1, _MM_SHUFFLE(0, 0, 3, 2)));
+
+                __m128d v_dst0 = _mm_loadu_pd(dst + x);
+                __m128d v_dst1 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst2 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst3 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst0 = _mm_add_pd(_mm_mul_pd(v_dst0, v_beta), _mm_mul_pd(v_src0, v_alpha));
+                v_dst1 = _mm_add_pd(_mm_mul_pd(v_dst1, v_beta), _mm_mul_pd(v_src1, v_alpha));
+                v_dst2 = _mm_add_pd(_mm_mul_pd(v_dst2, v_beta), _mm_mul_pd(v_src2, v_alpha));
+                v_dst3 = _mm_add_pd(_mm_mul_pd(v_dst3, v_beta), _mm_mul_pd(v_src3, v_alpha));
+
+                _mm_storeu_pd(dst + x, v_dst0);
+                _mm_storeu_pd(dst + x + 2, v_dst1);
+                _mm_storeu_pd(dst + x + 4, v_dst2);
+                _mm_storeu_pd(dst + x + 6, v_dst3);
+            }
+        }
+
+        return x;
+    }
+};
+
+template <>
+struct AccW_SIMD<ushort, double>
+{
+    int operator() (const ushort * src, double * dst, const uchar * mask, int len, int cn, double alpha) const
+    {
+        int x = 0;
+        __m128d v_alpha = _mm_set1_pd(alpha);
+        __m128d v_beta = _mm_set1_pd(1.0f - alpha);
+        __m128i v_0 = _mm_setzero_si128();
+
+        if (!mask)
+        {
+            len *= cn;
+            for ( ; x <= len - 8; x += 8)
+            {
+                __m128i v_src = _mm_loadu_si128((const __m128i*)(src + x));
+                __m128i v_int0 = _mm_unpacklo_epi16(v_src, v_0);
+                __m128i v_int1 = _mm_unpackhi_epi16(v_src, v_0);
+                __m128d v_src00 = _mm_cvtepi32_pd(v_int0);
+                __m128d v_src01 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int0, _MM_SHUFFLE(0, 0, 3, 2)));
+                __m128d v_src10 = _mm_cvtepi32_pd(v_int1);
+                __m128d v_src11 = _mm_cvtepi32_pd(_mm_shuffle_epi32(v_int1, _MM_SHUFFLE(0, 0, 3, 2)));
+
+                __m128d v_dst00 = _mm_loadu_pd(dst + x);
+                __m128d v_dst01 = _mm_loadu_pd(dst + x + 2);
+                __m128d v_dst10 = _mm_loadu_pd(dst + x + 4);
+                __m128d v_dst11 = _mm_loadu_pd(dst + x + 6);
+
+                v_dst00 = _mm_add_pd(_mm_mul_pd(v_dst00, v_beta), _mm_mul_pd(v_src00, v_alpha));
+                v_dst01 = _mm_add_pd(_mm_mul_pd(v_dst01, v_beta), _mm_mul_pd(v_src01, v_alpha));
+                v_dst10 = _mm_add_pd(_mm_mul_pd(v_dst10, v_beta), _mm_mul_pd(v_src10, v_alpha));
+                v_dst11 = _mm_add_pd(_mm_mul_pd(v_dst11, v_beta), _mm_mul_pd(v_src11, v_alpha));
+
+                _mm_storeu_pd(dst + x, v_dst00);
+                _mm_storeu_pd(dst + x + 2, v_dst01);
+                _mm_storeu_pd(dst + x + 4, v_dst10);
+                _mm_storeu_pd(dst + x + 6, v_dst11);
+            }
+        }
+
+        return x;
+    }
+};
+#endif //CV_SSE2
 
 #if CV_NEON
 
@@ -834,13 +2199,77 @@ static bool ocl_accumulate( InputArray _src, InputArray _src2, InputOutputArray 
     if (haveMask)
         k.set(argidx, maskarg);
 
-    size_t globalsize[2] = { src.cols * cn / kercn, (src.rows + rowsPerWI - 1) / rowsPerWI };
+    size_t globalsize[2] = { (size_t)src.cols * cn / kercn, ((size_t)src.rows + rowsPerWI - 1) / rowsPerWI };
     return k.run(2, globalsize, NULL, false);
 }
 
 #endif
 
 }
+
+#if defined(HAVE_IPP)
+namespace cv
+{
+static bool ipp_accumulate(InputArray _src, InputOutputArray _dst, InputArray _mask)
+{
+    int stype = _src.type(), sdepth = CV_MAT_DEPTH(stype), scn = CV_MAT_CN(stype);
+    int dtype = _dst.type(), ddepth = CV_MAT_DEPTH(dtype);
+
+    Mat src = _src.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
+
+    if (src.dims <= 2 || (src.isContinuous() && dst.isContinuous() && (mask.empty() || mask.isContinuous())))
+    {
+        typedef IppStatus (CV_STDCALL * ippiAdd)(const void * pSrc, int srcStep, Ipp32f * pSrcDst, int srcdstStep, IppiSize roiSize);
+        typedef IppStatus (CV_STDCALL * ippiAddMask)(const void * pSrc, int srcStep, const Ipp8u * pMask, int maskStep, Ipp32f * pSrcDst,
+                                                    int srcDstStep, IppiSize roiSize);
+        ippiAdd ippFunc = 0;
+        ippiAddMask ippFuncMask = 0;
+
+        if (mask.empty())
+        {
+            CV_SUPPRESS_DEPRECATED_START
+            ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAdd)ippiAdd_8u32f_C1IR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAdd)ippiAdd_16u32f_C1IR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAdd)ippiAdd_32f_C1IR : 0;
+            CV_SUPPRESS_DEPRECATED_END
+        }
+        else if (scn == 1)
+        {
+            ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddMask)ippiAdd_8u32f_C1IMR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddMask)ippiAdd_16u32f_C1IMR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddMask)ippiAdd_32f_C1IMR : 0;
+        }
+
+        if (ippFunc || ippFuncMask)
+        {
+            IppStatus status = ippStsErr;
+
+            Size size = src.size();
+            int srcstep = (int)src.step, dststep = (int)dst.step, maskstep = (int)mask.step;
+            if (src.isContinuous() && dst.isContinuous() && mask.isContinuous())
+            {
+                srcstep = static_cast<int>(src.total() * src.elemSize());
+                dststep = static_cast<int>(dst.total() * dst.elemSize());
+                maskstep = static_cast<int>(mask.total() * mask.elemSize());
+                size.width = static_cast<int>(src.total());
+                size.height = 1;
+            }
+            size.width *= scn;
+
+            if (ippFunc)
+                status = ippFunc(src.ptr(), srcstep, dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
+            else if(ippFuncMask)
+                status = ippFuncMask(src.ptr(), srcstep, mask.ptr<Ipp8u>(), maskstep,
+                                        dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
+
+            if (status >= 0)
+                return true;
+        }
+    }
+    return false;
+}
+}
+#endif
 
 void cv::accumulate( InputArray _src, InputOutputArray _dst, InputArray _mask )
 {
@@ -853,66 +2282,11 @@ void cv::accumulate( InputArray _src, InputOutputArray _dst, InputArray _mask )
     CV_OCL_RUN(_src.dims() <= 2 && _dst.isUMat(),
                ocl_accumulate(_src, noArray(), _dst, 0.0, _mask, ACCUMULATE))
 
+    CV_IPP_RUN((_src.dims() <= 2 || (_src.isContinuous() && _dst.isContinuous() && (_mask.empty() || _mask.isContinuous()))),
+        ipp_accumulate(_src, _dst, _mask));
+
     Mat src = _src.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
 
-#if defined HAVE_IPP
-    CV_IPP_CHECK()
-    {
-        if (src.dims <= 2 || (src.isContinuous() && dst.isContinuous() && (mask.empty() || mask.isContinuous())))
-        {
-            typedef IppStatus (CV_STDCALL * ippiAdd)(const void * pSrc, int srcStep, Ipp32f * pSrcDst, int srcdstStep, IppiSize roiSize);
-            typedef IppStatus (CV_STDCALL * ippiAddMask)(const void * pSrc, int srcStep, const Ipp8u * pMask, int maskStep, Ipp32f * pSrcDst,
-                                                        int srcDstStep, IppiSize roiSize);
-            ippiAdd ippFunc = 0;
-            ippiAddMask ippFuncMask = 0;
-
-            if (mask.empty())
-            {
-                CV_SUPPRESS_DEPRECATED_START
-                ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAdd)ippiAdd_8u32f_C1IR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAdd)ippiAdd_16u32f_C1IR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAdd)ippiAdd_32f_C1IR : 0;
-                CV_SUPPRESS_DEPRECATED_END
-            }
-            else if (scn == 1)
-            {
-                ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddMask)ippiAdd_8u32f_C1IMR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddMask)ippiAdd_16u32f_C1IMR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddMask)ippiAdd_32f_C1IMR : 0;
-            }
-
-            if (ippFunc || ippFuncMask)
-            {
-                IppStatus status = ippStsNoErr;
-
-                Size size = src.size();
-                int srcstep = (int)src.step, dststep = (int)dst.step, maskstep = (int)mask.step;
-                if (src.isContinuous() && dst.isContinuous() && mask.isContinuous())
-                {
-                    srcstep = static_cast<int>(src.total() * src.elemSize());
-                    dststep = static_cast<int>(dst.total() * dst.elemSize());
-                    maskstep = static_cast<int>(mask.total() * mask.elemSize());
-                    size.width = static_cast<int>(src.total());
-                    size.height = 1;
-                }
-                size.width *= scn;
-
-                if (mask.empty())
-                    status = ippFunc(src.ptr(), srcstep, dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
-                else
-                    status = ippFuncMask(src.ptr(), srcstep, mask.ptr<Ipp8u>(), maskstep,
-                                         dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
-
-                if (status >= 0)
-                {
-                    CV_IMPL_ADD(CV_IMPL_IPP);
-                    return;
-                }
-                setIppErrorStatus();
-            }
-        }
-    }
-#endif
 
     int fidx = getAccTabIdx(sdepth, ddepth);
     AccFunc func = fidx >= 0 ? accTab[fidx] : 0;
@@ -927,6 +2301,68 @@ void cv::accumulate( InputArray _src, InputOutputArray _dst, InputArray _mask )
         func(ptrs[0], ptrs[1], ptrs[2], len, scn);
 }
 
+#if defined(HAVE_IPP)
+namespace cv
+{
+static bool ipp_accumulate_square(InputArray _src, InputOutputArray _dst, InputArray _mask)
+{
+    int stype = _src.type(), sdepth = CV_MAT_DEPTH(stype), scn = CV_MAT_CN(stype);
+    int dtype = _dst.type(), ddepth = CV_MAT_DEPTH(dtype);
+
+    Mat src = _src.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
+
+    if (src.dims <= 2 || (src.isContinuous() && dst.isContinuous() && (mask.empty() || mask.isContinuous())))
+    {
+        typedef IppStatus (CV_STDCALL * ippiAddSquare)(const void * pSrc, int srcStep, Ipp32f * pSrcDst, int srcdstStep, IppiSize roiSize);
+        typedef IppStatus (CV_STDCALL * ippiAddSquareMask)(const void * pSrc, int srcStep, const Ipp8u * pMask, int maskStep, Ipp32f * pSrcDst,
+                                                            int srcDstStep, IppiSize roiSize);
+        ippiAddSquare ippFunc = 0;
+        ippiAddSquareMask ippFuncMask = 0;
+
+        if (mask.empty())
+        {
+            ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddSquare)ippiAddSquare_8u32f_C1IR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddSquare)ippiAddSquare_16u32f_C1IR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddSquare)ippiAddSquare_32f_C1IR : 0;
+        }
+        else if (scn == 1)
+        {
+            ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddSquareMask)ippiAddSquare_8u32f_C1IMR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddSquareMask)ippiAddSquare_16u32f_C1IMR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddSquareMask)ippiAddSquare_32f_C1IMR : 0;
+        }
+
+        if (ippFunc || ippFuncMask)
+        {
+            IppStatus status = ippStsErr;
+
+            Size size = src.size();
+            int srcstep = (int)src.step, dststep = (int)dst.step, maskstep = (int)mask.step;
+            if (src.isContinuous() && dst.isContinuous() && mask.isContinuous())
+            {
+                srcstep = static_cast<int>(src.total() * src.elemSize());
+                dststep = static_cast<int>(dst.total() * dst.elemSize());
+                maskstep = static_cast<int>(mask.total() * mask.elemSize());
+                size.width = static_cast<int>(src.total());
+                size.height = 1;
+            }
+            size.width *= scn;
+
+            if (ippFunc)
+                status = ippFunc(src.ptr(), srcstep, dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
+            else if(ippFuncMask)
+                status = ippFuncMask(src.ptr(), srcstep, mask.ptr<Ipp8u>(), maskstep,
+                                        dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
+
+            if (status >= 0)
+                return true;
+        }
+    }
+    return false;
+}
+}
+#endif
+
 void cv::accumulateSquare( InputArray _src, InputOutputArray _dst, InputArray _mask )
 {
     int stype = _src.type(), sdepth = CV_MAT_DEPTH(stype), scn = CV_MAT_CN(stype);
@@ -938,64 +2374,10 @@ void cv::accumulateSquare( InputArray _src, InputOutputArray _dst, InputArray _m
     CV_OCL_RUN(_src.dims() <= 2 && _dst.isUMat(),
                ocl_accumulate(_src, noArray(), _dst, 0.0, _mask, ACCUMULATE_SQUARE))
 
+    CV_IPP_RUN((_src.dims() <= 2 || (_src.isContinuous() && _dst.isContinuous() && (_mask.empty() || _mask.isContinuous()))),
+        ipp_accumulate_square(_src, _dst, _mask));
+
     Mat src = _src.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
-
-#if defined(HAVE_IPP)
-    CV_IPP_CHECK()
-    {
-        if (src.dims <= 2 || (src.isContinuous() && dst.isContinuous() && (mask.empty() || mask.isContinuous())))
-        {
-            typedef IppStatus (CV_STDCALL * ippiAddSquare)(const void * pSrc, int srcStep, Ipp32f * pSrcDst, int srcdstStep, IppiSize roiSize);
-            typedef IppStatus (CV_STDCALL * ippiAddSquareMask)(const void * pSrc, int srcStep, const Ipp8u * pMask, int maskStep, Ipp32f * pSrcDst,
-                                                               int srcDstStep, IppiSize roiSize);
-            ippiAddSquare ippFunc = 0;
-            ippiAddSquareMask ippFuncMask = 0;
-
-            if (mask.empty())
-            {
-                ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddSquare)ippiAddSquare_8u32f_C1IR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddSquare)ippiAddSquare_16u32f_C1IR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddSquare)ippiAddSquare_32f_C1IR : 0;
-            }
-            else if (scn == 1)
-            {
-                ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddSquareMask)ippiAddSquare_8u32f_C1IMR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddSquareMask)ippiAddSquare_16u32f_C1IMR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddSquareMask)ippiAddSquare_32f_C1IMR : 0;
-            }
-
-            if (ippFunc || ippFuncMask)
-            {
-                IppStatus status = ippStsNoErr;
-
-                Size size = src.size();
-                int srcstep = (int)src.step, dststep = (int)dst.step, maskstep = (int)mask.step;
-                if (src.isContinuous() && dst.isContinuous() && mask.isContinuous())
-                {
-                    srcstep = static_cast<int>(src.total() * src.elemSize());
-                    dststep = static_cast<int>(dst.total() * dst.elemSize());
-                    maskstep = static_cast<int>(mask.total() * mask.elemSize());
-                    size.width = static_cast<int>(src.total());
-                    size.height = 1;
-                }
-                size.width *= scn;
-
-                if (mask.empty())
-                    status = ippFunc(src.ptr(), srcstep, dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
-                else
-                    status = ippFuncMask(src.ptr(), srcstep, mask.ptr<Ipp8u>(), maskstep,
-                                         dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
-
-                if (status >= 0)
-                {
-                    CV_IMPL_ADD(CV_IMPL_IPP);
-                    return;
-                }
-                setIppErrorStatus();
-            }
-        }
-    }
-#endif
 
     int fidx = getAccTabIdx(sdepth, ddepth);
     AccFunc func = fidx >= 0 ? accSqrTab[fidx] : 0;
@@ -1010,6 +2392,74 @@ void cv::accumulateSquare( InputArray _src, InputOutputArray _dst, InputArray _m
         func(ptrs[0], ptrs[1], ptrs[2], len, scn);
 }
 
+#if defined(HAVE_IPP)
+namespace cv
+{
+static bool ipp_accumulate_product(InputArray _src1, InputArray _src2,
+                            InputOutputArray _dst, InputArray _mask)
+{
+    int stype = _src1.type(), sdepth = CV_MAT_DEPTH(stype), scn = CV_MAT_CN(stype);
+    int dtype = _dst.type(), ddepth = CV_MAT_DEPTH(dtype);
+
+    Mat src1 = _src1.getMat(), src2 = _src2.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
+
+    if (src1.dims <= 2 || (src1.isContinuous() && src2.isContinuous() && dst.isContinuous()))
+    {
+        typedef IppStatus (CV_STDCALL * ippiAddProduct)(const void * pSrc1, int src1Step, const void * pSrc2,
+                                                        int src2Step, Ipp32f * pSrcDst, int srcDstStep, IppiSize roiSize);
+        typedef IppStatus (CV_STDCALL * ippiAddProductMask)(const void * pSrc1, int src1Step, const void * pSrc2, int src2Step,
+                                                            const Ipp8u * pMask, int maskStep, Ipp32f * pSrcDst, int srcDstStep, IppiSize roiSize);
+        ippiAddProduct ippFunc = 0;
+        ippiAddProductMask ippFuncMask = 0;
+
+        if (mask.empty())
+        {
+            ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddProduct)ippiAddProduct_8u32f_C1IR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddProduct)ippiAddProduct_16u32f_C1IR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddProduct)ippiAddProduct_32f_C1IR : 0;
+        }
+        else if (scn == 1)
+        {
+            ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddProductMask)ippiAddProduct_8u32f_C1IMR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddProductMask)ippiAddProduct_16u32f_C1IMR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddProductMask)ippiAddProduct_32f_C1IMR : 0;
+        }
+
+        if (ippFunc || ippFuncMask)
+        {
+            IppStatus status = ippStsErr;
+
+            Size size = src1.size();
+            int src1step = (int)src1.step, src2step = (int)src2.step, dststep = (int)dst.step, maskstep = (int)mask.step;
+            if (src1.isContinuous() && src2.isContinuous() && dst.isContinuous() && mask.isContinuous())
+            {
+                src1step = static_cast<int>(src1.total() * src1.elemSize());
+                src2step = static_cast<int>(src2.total() * src2.elemSize());
+                dststep = static_cast<int>(dst.total() * dst.elemSize());
+                maskstep = static_cast<int>(mask.total() * mask.elemSize());
+                size.width = static_cast<int>(src1.total());
+                size.height = 1;
+            }
+            size.width *= scn;
+
+            if (ippFunc)
+                status = ippFunc(src1.ptr(), src1step, src2.ptr(), src2step, dst.ptr<Ipp32f>(),
+                                    dststep, ippiSize(size.width, size.height));
+            else if(ippFuncMask)
+                status = ippFuncMask(src1.ptr(), src1step, src2.ptr(), src2step, mask.ptr<Ipp8u>(), maskstep,
+                                        dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
+
+            if (status >= 0)
+                return true;
+        }
+    }
+    return false;
+}
+}
+#endif
+
+
+
 void cv::accumulateProduct( InputArray _src1, InputArray _src2,
                             InputOutputArray _dst, InputArray _mask )
 {
@@ -1023,67 +2473,10 @@ void cv::accumulateProduct( InputArray _src1, InputArray _src2,
     CV_OCL_RUN(_src1.dims() <= 2 && _dst.isUMat(),
                ocl_accumulate(_src1, _src2, _dst, 0.0, _mask, ACCUMULATE_PRODUCT))
 
+    CV_IPP_RUN( (_src1.dims() <= 2 || (_src1.isContinuous() && _src2.isContinuous() && _dst.isContinuous())),
+        ipp_accumulate_product(_src1, _src2, _dst, _mask));
+
     Mat src1 = _src1.getMat(), src2 = _src2.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
-
-#if defined(HAVE_IPP)
-    CV_IPP_CHECK()
-    {
-        if (src1.dims <= 2 || (src1.isContinuous() && src2.isContinuous() && dst.isContinuous()))
-        {
-            typedef IppStatus (CV_STDCALL * ippiAddProduct)(const void * pSrc1, int src1Step, const void * pSrc2,
-                                                            int src2Step, Ipp32f * pSrcDst, int srcDstStep, IppiSize roiSize);
-            typedef IppStatus (CV_STDCALL * ippiAddProductMask)(const void * pSrc1, int src1Step, const void * pSrc2, int src2Step,
-                                                                const Ipp8u * pMask, int maskStep, Ipp32f * pSrcDst, int srcDstStep, IppiSize roiSize);
-            ippiAddProduct ippFunc = 0;
-            ippiAddProductMask ippFuncMask = 0;
-
-            if (mask.empty())
-            {
-                ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddProduct)ippiAddProduct_8u32f_C1IR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddProduct)ippiAddProduct_16u32f_C1IR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddProduct)ippiAddProduct_32f_C1IR : 0;
-            }
-            else if (scn == 1)
-            {
-                ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddProductMask)ippiAddProduct_8u32f_C1IMR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddProductMask)ippiAddProduct_16u32f_C1IMR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddProductMask)ippiAddProduct_32f_C1IMR : 0;
-            }
-
-            if (ippFunc || ippFuncMask)
-            {
-                IppStatus status = ippStsNoErr;
-
-                Size size = src1.size();
-                int src1step = (int)src1.step, src2step = (int)src2.step, dststep = (int)dst.step, maskstep = (int)mask.step;
-                if (src1.isContinuous() && src2.isContinuous() && dst.isContinuous() && mask.isContinuous())
-                {
-                    src1step = static_cast<int>(src1.total() * src1.elemSize());
-                    src2step = static_cast<int>(src2.total() * src2.elemSize());
-                    dststep = static_cast<int>(dst.total() * dst.elemSize());
-                    maskstep = static_cast<int>(mask.total() * mask.elemSize());
-                    size.width = static_cast<int>(src1.total());
-                    size.height = 1;
-                }
-                size.width *= scn;
-
-                if (mask.empty())
-                    status = ippFunc(src1.ptr(), src1step, src2.ptr(), src2step, dst.ptr<Ipp32f>(),
-                                     dststep, ippiSize(size.width, size.height));
-                else
-                    status = ippFuncMask(src1.ptr(), src1step, src2.ptr(), src2step, mask.ptr<Ipp8u>(), maskstep,
-                                         dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height));
-
-                if (status >= 0)
-                {
-                    CV_IMPL_ADD(CV_IMPL_IPP);
-                    return;
-                }
-                setIppErrorStatus();
-            }
-        }
-    }
-#endif
 
     int fidx = getAccTabIdx(sdepth, ddepth);
     AccProdFunc func = fidx >= 0 ? accProdTab[fidx] : 0;
@@ -1098,6 +2491,71 @@ void cv::accumulateProduct( InputArray _src1, InputArray _src2,
         func(ptrs[0], ptrs[1], ptrs[2], ptrs[3], len, scn);
 }
 
+#if defined(HAVE_IPP)
+namespace cv
+{
+static bool ipp_accumulate_weighted( InputArray _src, InputOutputArray _dst,
+                             double alpha, InputArray _mask )
+{
+    int stype = _src.type(), sdepth = CV_MAT_DEPTH(stype), scn = CV_MAT_CN(stype);
+    int dtype = _dst.type(), ddepth = CV_MAT_DEPTH(dtype);
+
+    Mat src = _src.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
+
+    if (src.dims <= 2 || (src.isContinuous() && dst.isContinuous() && mask.isContinuous()))
+    {
+        typedef IppStatus (CV_STDCALL * ippiAddWeighted)(const void * pSrc, int srcStep, Ipp32f * pSrcDst, int srcdstStep,
+                                                            IppiSize roiSize, Ipp32f alpha);
+        typedef IppStatus (CV_STDCALL * ippiAddWeightedMask)(const void * pSrc, int srcStep, const Ipp8u * pMask,
+                                                                int maskStep, Ipp32f * pSrcDst,
+                                                                int srcDstStep, IppiSize roiSize, Ipp32f alpha);
+        ippiAddWeighted ippFunc = 0;
+        ippiAddWeightedMask ippFuncMask = 0;
+
+        if (mask.empty())
+        {
+            ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddWeighted)ippiAddWeighted_8u32f_C1IR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddWeighted)ippiAddWeighted_16u32f_C1IR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddWeighted)ippiAddWeighted_32f_C1IR : 0;
+        }
+        else if (scn == 1)
+        {
+            ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddWeightedMask)ippiAddWeighted_8u32f_C1IMR :
+                sdepth == CV_16U && ddepth == CV_32F ? (ippiAddWeightedMask)ippiAddWeighted_16u32f_C1IMR :
+                sdepth == CV_32F && ddepth == CV_32F ? (ippiAddWeightedMask)ippiAddWeighted_32f_C1IMR : 0;
+        }
+
+        if (ippFunc || ippFuncMask)
+        {
+            IppStatus status = ippStsErr;
+
+            Size size = src.size();
+            int srcstep = (int)src.step, dststep = (int)dst.step, maskstep = (int)mask.step;
+            if (src.isContinuous() && dst.isContinuous() && mask.isContinuous())
+            {
+                srcstep = static_cast<int>(src.total() * src.elemSize());
+                dststep = static_cast<int>(dst.total() * dst.elemSize());
+                maskstep = static_cast<int>(mask.total() * mask.elemSize());
+                size.width = static_cast<int>((int)src.total());
+                size.height = 1;
+            }
+            size.width *= scn;
+
+            if (ippFunc)
+                status = ippFunc(src.ptr(), srcstep, dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height), (Ipp32f)alpha);
+            else if(ippFuncMask)
+                status = ippFuncMask(src.ptr(), srcstep, mask.ptr<Ipp8u>(), maskstep,
+                                        dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height), (Ipp32f)alpha);
+
+            if (status >= 0)
+                return true;
+        }
+    }
+    return false;
+}
+}
+#endif
+
 void cv::accumulateWeighted( InputArray _src, InputOutputArray _dst,
                              double alpha, InputArray _mask )
 {
@@ -1110,66 +2568,11 @@ void cv::accumulateWeighted( InputArray _src, InputOutputArray _dst,
     CV_OCL_RUN(_src.dims() <= 2 && _dst.isUMat(),
                ocl_accumulate(_src, noArray(), _dst, alpha, _mask, ACCUMULATE_WEIGHTED))
 
+    CV_IPP_RUN((_src.dims() <= 2 || (_src.isContinuous() && _dst.isContinuous() && _mask.isContinuous())), ipp_accumulate_weighted(_src, _dst, alpha, _mask));
+
+
     Mat src = _src.getMat(), dst = _dst.getMat(), mask = _mask.getMat();
 
-#if defined(HAVE_IPP)
-    CV_IPP_CHECK()
-    {
-        if (src.dims <= 2 || (src.isContinuous() && dst.isContinuous() && mask.isContinuous()))
-        {
-            typedef IppStatus (CV_STDCALL * ippiAddWeighted)(const void * pSrc, int srcStep, Ipp32f * pSrcDst, int srcdstStep,
-                                                             IppiSize roiSize, Ipp32f alpha);
-            typedef IppStatus (CV_STDCALL * ippiAddWeightedMask)(const void * pSrc, int srcStep, const Ipp8u * pMask,
-                                                                 int maskStep, Ipp32f * pSrcDst,
-                                                                 int srcDstStep, IppiSize roiSize, Ipp32f alpha);
-            ippiAddWeighted ippFunc = 0;
-            ippiAddWeightedMask ippFuncMask = 0;
-
-            if (mask.empty())
-            {
-                ippFunc = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddWeighted)ippiAddWeighted_8u32f_C1IR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddWeighted)ippiAddWeighted_16u32f_C1IR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddWeighted)ippiAddWeighted_32f_C1IR : 0;
-            }
-            else if (scn == 1)
-            {
-                ippFuncMask = sdepth == CV_8U && ddepth == CV_32F ? (ippiAddWeightedMask)ippiAddWeighted_8u32f_C1IMR :
-                    sdepth == CV_16U && ddepth == CV_32F ? (ippiAddWeightedMask)ippiAddWeighted_16u32f_C1IMR :
-                    sdepth == CV_32F && ddepth == CV_32F ? (ippiAddWeightedMask)ippiAddWeighted_32f_C1IMR : 0;
-            }
-
-            if (ippFunc || ippFuncMask)
-            {
-                IppStatus status = ippStsNoErr;
-
-                Size size = src.size();
-                int srcstep = (int)src.step, dststep = (int)dst.step, maskstep = (int)mask.step;
-                if (src.isContinuous() && dst.isContinuous() && mask.isContinuous())
-                {
-                    srcstep = static_cast<int>(src.total() * src.elemSize());
-                    dststep = static_cast<int>(dst.total() * dst.elemSize());
-                    maskstep = static_cast<int>(mask.total() * mask.elemSize());
-                    size.width = static_cast<int>((int)src.total());
-                    size.height = 1;
-                }
-                size.width *= scn;
-
-                if (mask.empty())
-                    status = ippFunc(src.ptr(), srcstep, dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height), (Ipp32f)alpha);
-                else
-                    status = ippFuncMask(src.ptr(), srcstep, mask.ptr<Ipp8u>(), maskstep,
-                                         dst.ptr<Ipp32f>(), dststep, ippiSize(size.width, size.height), (Ipp32f)alpha);
-
-                if (status >= 0)
-                {
-                    CV_IMPL_ADD(CV_IMPL_IPP);
-                    return;
-                }
-                setIppErrorStatus();
-            }
-        }
-    }
-#endif
 
     int fidx = getAccTabIdx(sdepth, ddepth);
     AccWFunc func = fidx >= 0 ? accWTab[fidx] : 0;

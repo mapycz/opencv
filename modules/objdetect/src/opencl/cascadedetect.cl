@@ -12,19 +12,22 @@
 //    Erping Pang, erping@multicorewareinc.com
 //
 
-
+#ifdef HAAR
 typedef struct __attribute__((aligned(4))) OptHaarFeature
 {
     int4 ofs[3] __attribute__((aligned (4)));
     float4 weight __attribute__((aligned (4)));
 }
 OptHaarFeature;
+#endif
 
+#ifdef LBP
 typedef struct __attribute__((aligned(4))) OptLBPFeature
 {
     int16 ofs __attribute__((aligned (4)));
 }
 OptLBPFeature;
+#endif
 
 typedef struct __attribute__((aligned(4))) Stump
 {
@@ -64,6 +67,7 @@ ScaleData;
 #define NODE_COUNT 1
 #endif
 
+#ifdef HAAR
 __kernel __attribute__((reqd_work_group_size(LOCAL_SIZE_X,LOCAL_SIZE_Y,1)))
 void runHaarClassifier(
     int nscales, __global const ScaleData* scaleData,
@@ -136,7 +140,6 @@ void runHaarClassifier(
                 int dy = i/SUM_BUF_STEP, dx = i - dy*SUM_BUF_STEP;
                 vstore4(vload4(0, psum0 + mad24(dy, sumstep, dx)), 0, ibuf+i);
             }
-            barrier(CLK_LOCAL_MEM_FENCE);
             #endif
 
             if( lidx == 0 )
@@ -157,7 +160,7 @@ void runHaarClassifier(
                 __global const int* psum = psum1;
                 #endif
 
-                __global const float* psqsum = (__global const float*)(psum1 + sqofs);
+                __global const int* psqsum = (__global const int*)(psum1 + sqofs);
                 float sval = (psum[nofs.x] - psum[nofs.y] - psum[nofs.z] + psum[nofs.w])*invarea;
                 float sqval = (psqsum[nofs0.x] - psqsum[nofs0.y] - psqsum[nofs0.z] + psqsum[nofs0.w])*invarea;
                 float nf = (float)normarea * sqrt(max(sqval - sval * sval, 0.f));
@@ -177,11 +180,11 @@ void runHaarClassifier(
                         int4 ofs = f->ofs[0];
                         sval = (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.x;
                         ofs = f->ofs[1];
-                        sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.y;
+                        sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.y, sval);
                         if( weight.z > 0 )
                         {
                             ofs = f->ofs[2];
-                            sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.z;
+                            sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.z, sval);
                         }
 
                         s += (sval < st.y*nf) ? st.z : st.w;
@@ -201,11 +204,11 @@ void runHaarClassifier(
 
                             sval = (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.x;
                             ofs = f->ofs[1];
-                            sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.y;
+                            sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.y, sval);
                             if( weight.z > 0 )
                             {
                                 ofs = f->ofs[2];
-                                sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.z;
+                                sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.z, sval);
                             }
 
                             idx = (sval < as_float(n.y)*nf) ? n.z : n.w;
@@ -229,11 +232,12 @@ void runHaarClassifier(
 
             for( stageIdx = SPLIT_STAGE; stageIdx < N_STAGES; stageIdx++ )
             {
+                barrier(CLK_LOCAL_MEM_FENCE);
                 int nrects = lcount[0];
 
-                barrier(CLK_LOCAL_MEM_FENCE);
                 if( nrects == 0 )
                     break;
+                barrier(CLK_LOCAL_MEM_FENCE);
                 if( lidx == 0 )
                     lcount[0] = 0;
 
@@ -277,11 +281,12 @@ void runHaarClassifier(
                             int4 ofs = f->ofs[0];
                             float sval = (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.x;
                             ofs = f->ofs[1];
-                            sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.y;
+                            sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.y, sval);
                             //if( weight.z > 0 )
+                            if( fabs(weight.z) > 0 )
                             {
                                 ofs = f->ofs[2];
-                                sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.z;
+                                sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.z, sval);
                             }
 
                             partsum += (sval < st.y*nf) ? st.z : st.w;
@@ -299,11 +304,11 @@ void runHaarClassifier(
 
                                 float sval = (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.x;
                                 ofs = f->ofs[1];
-                                sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.y;
+                                sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.y, sval);
                                 if( weight.z > 0 )
                                 {
                                     ofs = f->ofs[2];
-                                    sval += (psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w])*weight.z;
+                                    sval = mad((psum[ofs.x] - psum[ofs.y] - psum[ofs.z] + psum[ofs.w]), weight.z, sval);
                                 }
 
                                 idx = (sval < as_float(n.y)*nf) ? n.z : n.w;
@@ -352,7 +357,9 @@ void runHaarClassifier(
         }
     }
 }
+#endif
 
+#ifdef LBP
 #undef CALC_SUM_OFS_
 #define CALC_SUM_OFS_(p0, p1, p2, p3, ptr) \
     ((ptr)[p0] - (ptr)[p1] - (ptr)[p2] + (ptr)[p3])
@@ -390,8 +397,8 @@ __kernel void runLBPClassifierStumpSimple(
 
         for( tileIdx = groupIdx; tileIdx < totalTiles; tileIdx += ngroups )
         {
-            int iy = ((tileIdx / ntiles.x)*local_size_y + ly)*ystep;
-            int ix = ((tileIdx % ntiles.x)*local_size_x + lx)*ystep;
+            int iy = mad24((tileIdx / ntiles.x), local_size_y, ly) * ystep;
+            int ix = mad24((tileIdx % ntiles.x), local_size_x, lx) * ystep;
 
             if( ix < worksize.x && iy < worksize.y )
             {
@@ -651,3 +658,4 @@ void runLBPClassifierStump(
         }
     }
 }
+#endif

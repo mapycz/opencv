@@ -331,7 +331,11 @@ OCL_TEST_P(Mul, Mat_Scale)
         OCL_OFF(cv::multiply(src1_roi, src2_roi, dst1_roi, val[0]));
         OCL_ON(cv::multiply(usrc1_roi, usrc2_roi, udst1_roi, val[0]));
 
+#ifdef ANDROID
+        Near(udst1_roi.depth() >= CV_32F ? 2e-1 : 1);
+#else
         Near(udst1_roi.depth() >= CV_32F ? 1e-3 : 1);
+#endif
     }
 }
 
@@ -1577,7 +1581,7 @@ PARAM_TEST_CASE(ConvertScaleAbs, MatDepth, Channels, bool)
 
         Size roiSize = randomSize(1, MAX_VALUE);
         Border srcBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
-        randomSubMat(src, src_roi, roiSize, srcBorder, stype, 2, 11); // FIXIT: Test with minV, maxV
+        randomSubMat(src, src_roi, roiSize, srcBorder, stype, -11, 11); // FIXIT: Test with minV, maxV
 
         Border dstBorder = randomBorder(0, use_roi ? MAX_VALUE : 0);
         randomSubMat(dst, dst_roi, roiSize, dstBorder, dtype, 5, 16);
@@ -1880,6 +1884,22 @@ OCL_INSTANTIATE_TEST_CASE_P(Arithm, ReduceMin, Combine(testing::Values(std::make
                                                                        std::make_pair<MatDepth, MatDepth>(CV_64F, CV_64F)),
                                                        OCL_ALL_CHANNELS, testing::Values(0, 1), Bool()));
 
+
+// T-API BUG (haveOpenCL() is false): modules/core/src/matrix.cpp:212: error: (-215) u->refcount == 0 in function deallocate
+OCL_TEST(Normalize, DISABLED_regression_5876_inplace_change_type)
+{
+    double initial_values[] = {1, 2, 5, 4, 3};
+    float result_values[] = {0, 0.25, 1, 0.75, 0.5};
+    Mat m(Size(5, 1), CV_64FC1, initial_values);
+    Mat result(Size(5, 1), CV_32FC1, result_values);
+
+    UMat um; m.copyTo(um);
+    UMat uresult; result.copyTo(uresult);
+
+    OCL_ON(normalize(um, um, 1, 0, NORM_MINMAX, CV_32F));
+
+    EXPECT_EQ(0, cvtest::norm(um, uresult, NORM_INF));
+}
 
 } } // namespace cvtest::ocl
 

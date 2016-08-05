@@ -34,6 +34,11 @@ unset(IPP_VERSION_MAJOR)
 unset(IPP_VERSION_MINOR)
 unset(IPP_VERSION_BUILD)
 
+if (X86 AND UNIX AND NOT APPLE AND NOT ANDROID AND BUILD_SHARED_LIBS)
+    message(STATUS "On 32-bit Linux IPP can not currently be used with dynamic libs because of linker errors. Set BUILD_SHARED_LIBS=OFF")
+    return()
+endif()
+
 set(IPP_X64 0)
 if(CMAKE_CXX_SIZEOF_DATA_PTR EQUAL 8)
     set(IPP_X64 1)
@@ -132,24 +137,24 @@ macro(ipp_detect_version)
     endif ()
     if (EXISTS ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX})
       if (BUILD_WITH_DYNAMIC_IPP AND NOT HAVE_IPP_ICV_ONLY)
-        add_library(${IPP_PREFIX}${name} STATIC IMPORTED)
+        # When using dynamic libraries from standalone IPP it is your responsibility to install those on the target system
+        list(APPEND IPP_LIBRARIES ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX})
       else ()
-        add_library(${IPP_PREFIX}${name} SHARED IMPORTED)
-      endif ()
-      set_target_properties(${IPP_PREFIX}${name} PROPERTIES
-        IMPORTED_LINK_INTERFACE_LIBRARIES ""
-        IMPORTED_LOCATION ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}
-      )
-      list(APPEND IPP_LIBRARIES ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX})
-      # CMake doesn't support "install(TARGETS ${IPP_PREFIX}${name} " command with imported targets
-      # When using dynamic libraries from standalone IPP it is your responsibility to install those on the target system
-      if (NOT BUILD_WITH_DYNAMIC_IPP)
-        install(FILES ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}
-                DESTINATION ${OPENCV_3P_LIB_INSTALL_PATH} COMPONENT main)
-        string(TOUPPER ${name} uname)
-        set(IPP${uname}_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/${OPENCV_3P_LIB_INSTALL_PATH}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}" CACHE INTERNAL "" FORCE)
-        set(IPP${uname}_LOCATION_PATH "${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}" CACHE INTERNAL "" FORCE)
-      endif ()
+        add_library(ipp${name} STATIC IMPORTED)
+        set_target_properties(ipp${name} PROPERTIES
+          IMPORTED_LINK_INTERFACE_LIBRARIES ""
+          IMPORTED_LOCATION ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}
+        )
+        list(APPEND IPP_LIBRARIES ipp${name})
+        if (NOT BUILD_SHARED_LIBS)
+          # CMake doesn't support "install(TARGETS ${IPP_PREFIX}${name} " command with imported targets
+          install(FILES ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}
+                  DESTINATION ${OPENCV_3P_LIB_INSTALL_PATH} COMPONENT dev)
+          string(TOUPPER ${name} uname)
+          set(IPP${uname}_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/${OPENCV_3P_LIB_INSTALL_PATH}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}" CACHE INTERNAL "" FORCE)
+          set(IPP${uname}_LOCATION_PATH "${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}" CACHE INTERNAL "" FORCE)
+        endif()
+      endif()
     else()
       message(STATUS "Can't find IPP library: ${name} at ${IPP_LIBRARY_DIR}/${IPP_LIB_PREFIX}${IPP_PREFIX}${name}${IPP_SUFFIX}${IPP_LIB_SUFFIX}")
     endif()

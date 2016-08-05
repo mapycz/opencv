@@ -149,15 +149,121 @@ int CV_SLMLTest::validate_test_results( int testCaseIdx )
 }
 
 TEST(ML_NaiveBayes, save_load) { CV_SLMLTest test( CV_NBAYES ); test.safe_run(); }
-//CV_SLMLTest lsmlknearest( CV_KNEAREST, "slknearest" ); // does not support save!
+TEST(ML_KNearest, save_load) { CV_SLMLTest test( CV_KNEAREST ); test.safe_run(); }
 TEST(ML_SVM, save_load) { CV_SLMLTest test( CV_SVM ); test.safe_run(); }
-//CV_SLMLTest lsmlem( CV_EM, "slem" ); // does not support save!
 TEST(ML_ANN, save_load) { CV_SLMLTest test( CV_ANN ); test.safe_run(); }
 TEST(ML_DTree, save_load) { CV_SLMLTest test( CV_DTREE ); test.safe_run(); }
 TEST(ML_Boost, save_load) { CV_SLMLTest test( CV_BOOST ); test.safe_run(); }
 TEST(ML_RTrees, save_load) { CV_SLMLTest test( CV_RTREES ); test.safe_run(); }
 TEST(DISABLED_ML_ERTrees, save_load) { CV_SLMLTest test( CV_ERTREES ); test.safe_run(); }
+TEST(MV_SVMSGD, save_load){ CV_SLMLTest test( CV_SVMSGD ); test.safe_run(); }
 
+class CV_LegacyTest : public cvtest::BaseTest
+{
+public:
+    CV_LegacyTest(const std::string &_modelName, const std::string &_suffixes = std::string())
+        : cvtest::BaseTest(), modelName(_modelName), suffixes(_suffixes)
+    {
+    }
+    virtual ~CV_LegacyTest() {}
+protected:
+    void run(int)
+    {
+        unsigned int idx = 0;
+        for (;;)
+        {
+            if (idx >= suffixes.size())
+                break;
+            int found = (int)suffixes.find(';', idx);
+            string piece = suffixes.substr(idx, found - idx);
+            if (piece.empty())
+                break;
+            oneTest(piece);
+            idx += (unsigned int)piece.size() + 1;
+        }
+    }
+    void oneTest(const string & suffix)
+    {
+        using namespace cv::ml;
+
+        int code = cvtest::TS::OK;
+        string filename = ts->get_data_path() + "legacy/" + modelName + suffix;
+        bool isTree = modelName == CV_BOOST || modelName == CV_DTREE || modelName == CV_RTREES;
+        Ptr<StatModel> model;
+        if (modelName == CV_BOOST)
+            model = Algorithm::load<Boost>(filename);
+        else if (modelName == CV_ANN)
+            model = Algorithm::load<ANN_MLP>(filename);
+        else if (modelName == CV_DTREE)
+            model = Algorithm::load<DTrees>(filename);
+        else if (modelName == CV_NBAYES)
+            model = Algorithm::load<NormalBayesClassifier>(filename);
+        else if (modelName == CV_SVM)
+            model = Algorithm::load<SVM>(filename);
+        else if (modelName == CV_RTREES)
+            model = Algorithm::load<RTrees>(filename);
+        else if (modelName == CV_SVMSGD)
+            model = Algorithm::load<SVMSGD>(filename);
+        if (!model)
+        {
+            code = cvtest::TS::FAIL_INVALID_TEST_DATA;
+        }
+        else
+        {
+            Mat input = Mat(isTree ? 10 : 1, model->getVarCount(), CV_32F);
+            ts->get_rng().fill(input, RNG::UNIFORM, 0, 40);
+
+            if (isTree)
+                randomFillCategories(filename, input);
+
+            Mat output;
+            model->predict(input, output, StatModel::RAW_OUTPUT | (isTree ? DTrees::PREDICT_SUM : 0));
+            // just check if no internal assertions or errors thrown
+        }
+        ts->set_failed_test_info(code);
+    }
+    void randomFillCategories(const string & filename, Mat & input)
+    {
+        Mat catMap;
+        Mat catCount;
+        std::vector<uchar> varTypes;
+
+        FileStorage fs(filename, FileStorage::READ);
+        FileNode root = fs.getFirstTopLevelNode();
+        root["cat_map"] >> catMap;
+        root["cat_count"] >> catCount;
+        root["var_type"] >> varTypes;
+
+        int offset = 0;
+        int countOffset = 0;
+        uint var = 0, varCount = (uint)varTypes.size();
+        for (; var < varCount; ++var)
+        {
+            if (varTypes[var] == ml::VAR_CATEGORICAL)
+            {
+                int size = catCount.at<int>(0, countOffset);
+                for (int row = 0; row < input.rows; ++row)
+                {
+                    int randomChosenIndex = offset + ((uint)ts->get_rng()) % size;
+                    int value = catMap.at<int>(0, randomChosenIndex);
+                    input.at<float>(row, var) = (float)value;
+                }
+                offset += size;
+                ++countOffset;
+            }
+        }
+    }
+    string modelName;
+    string suffixes;
+};
+
+TEST(ML_ANN, legacy_load) { CV_LegacyTest test(CV_ANN, "_waveform.xml"); test.safe_run(); }
+TEST(ML_Boost, legacy_load) { CV_LegacyTest test(CV_BOOST, "_adult.xml;_1.xml;_2.xml;_3.xml"); test.safe_run(); }
+TEST(ML_DTree, legacy_load) { CV_LegacyTest test(CV_DTREE, "_abalone.xml;_mushroom.xml"); test.safe_run(); }
+TEST(ML_NBayes, legacy_load) { CV_LegacyTest test(CV_NBAYES, "_waveform.xml"); test.safe_run(); }
+TEST(ML_SVM, legacy_load) { CV_LegacyTest test(CV_SVM, "_poletelecomm.xml;_waveform.xml"); test.safe_run(); }
+TEST(ML_RTrees, legacy_load) { CV_LegacyTest test(CV_RTREES, "_waveform.xml"); test.safe_run(); }
+TEST(ML_SVMSGD, legacy_load) { CV_LegacyTest test(CV_SVMSGD, "_waveform.xml"); test.safe_run(); }
 
 /*TEST(ML_SVM, throw_exception_when_save_untrained_model)
 {
@@ -171,11 +277,11 @@ TEST(DISABLED_ML_SVM, linear_save_load)
 {
     Ptr<cv::ml::SVM> svm1, svm2, svm3;
 
-    svm1 = StatModel::load<SVM>("SVM45_X_38-1.xml");
-    svm2 = StatModel::load<SVM>("SVM45_X_38-2.xml");
+    svm1 = Algorithm::load<SVM>("SVM45_X_38-1.xml");
+    svm2 = Algorithm::load<SVM>("SVM45_X_38-2.xml");
     string tname = tempfile("a.xml");
     svm2->save(tname);
-    svm3 = StatModel::load<SVM>(tname);
+    svm3 = Algorithm::load<SVM>(tname);
 
     ASSERT_EQ(svm1->getVarCount(), svm2->getVarCount());
     ASSERT_EQ(svm1->getVarCount(), svm3->getVarCount());

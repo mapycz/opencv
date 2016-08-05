@@ -125,7 +125,7 @@ _CvContourInfo;
 
 
 /*
-  Structure that is used for sequental retrieving contours from the image.
+  Structure that is used for sequential retrieving contours from the image.
   It supports both hierarchical and plane variants of Suzuki algorithm.
 */
 typedef struct _CvContourScanner
@@ -193,7 +193,9 @@ cvStartFindContours( void* _img, CvMemStorage* storage,
 
     if( !((CV_IS_MASK_ARR( mat ) && mode < CV_RETR_FLOODFILL) ||
           (CV_MAT_TYPE(mat->type) == CV_32SC1 && mode == CV_RETR_FLOODFILL)) )
-        CV_Error( CV_StsUnsupportedFormat, "[Start]FindContours support only 8uC1 and 32sC1 images" );
+        CV_Error( CV_StsUnsupportedFormat,
+                  "[Start]FindContours supports only CV_8UC1 images when mode != CV_RETR_FLOODFILL "
+                  "otherwise supports CV_32SC1 images only" );
 
     CvSize size = cvSize( mat->width, mat->height );
     int step = mat->step;
@@ -220,7 +222,6 @@ cvStartFindContours( void* _img, CvMemStorage* storage,
     scanner->lnbd.x = 0;
     scanner->lnbd.y = 1;
     scanner->nbd = 2;
-    scanner->mode = (int) mode;
     scanner->frame_info.contour = &(scanner->frame);
     scanner->frame_info.is_hole = 1;
     scanner->frame_info.next = 0;
@@ -314,7 +315,7 @@ cvStartFindContours( void* _img, CvMemStorage* storage,
          tree. The retrieved contour itself is removed from the storage.
          Here two cases are possible:
             2a. If one deals with plane variant of algorithm
-                (hierarchical strucutre is not reconstructed),
+                (hierarchical structure is not reconstructed),
                 the contour is removed completely.
             2b. In hierarchical case, the header of the contour is not removed.
                 It's marked as "link to contour" and h_next pointer of it is set to
@@ -326,8 +327,8 @@ cvStartFindContours( void* _img, CvMemStorage* storage,
          leaves header if hierarchical (but doesn't mark header as "link").
       ------------------------------------------------------------------------
       The 1st variant can be used to retrieve and store all the contours from the image
-      (with optional convertion from chains to contours using some approximation from
-      restriced set of methods). Some characteristics of contour can be computed in the
+      (with optional conversion from chains to contours using some approximation from
+      restricted set of methods). Some characteristics of contour can be computed in the
       same pass.
 
       The usage scheme can look like:

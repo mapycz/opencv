@@ -2,7 +2,11 @@
 #  CMake file for OpenCV docs
 #-----------------------
 
-set(HAVE_DOC_GENERATOR BUILD_DOCS AND (HAVE_SPHINX OR HAVE_DOXYGEN))
+if(BUILD_DOCS AND DOXYGEN_FOUND)
+  set(HAVE_DOC_GENERATOR TRUE)
+else()
+  set(HAVE_DOC_GENERATOR FALSE)
+endif()
 
 if(HAVE_DOC_GENERATOR)
   project(opencv_docs)
@@ -23,133 +27,14 @@ if(HAVE_DOC_GENERATOR)
   set(FIXED_ORDER_MODULES core imgproc imgcodecs videoio highgui video calib3d features2d objdetect ml flann photo stitching)
   list(REMOVE_ITEM BASE_MODULES ${FIXED_ORDER_MODULES})
   set(BASE_MODULES ${FIXED_ORDER_MODULES} ${BASE_MODULES})
-
-  set(DOC_LIST
-      "${OpenCV_SOURCE_DIR}/doc/opencv-logo.png"
-      "${OpenCV_SOURCE_DIR}/doc/opencv-logo2.png"
-      "${OpenCV_SOURCE_DIR}/doc/opencv-logo-white.png"
-      "${OpenCV_SOURCE_DIR}/doc/opencv.ico"
-      "${OpenCV_SOURCE_DIR}/doc/pattern.png"
-      "${OpenCV_SOURCE_DIR}/doc/acircles_pattern.png")
-  set(OPTIONAL_DOC_LIST "")
 endif(HAVE_DOC_GENERATOR)
-
-# ========= Sphinx docs =========
-if(BUILD_DOCS AND HAVE_SPHINX)
-  if(NOT INSTALL_CREATE_DISTRIB)
-    list(APPEND DOC_LIST "${OpenCV_SOURCE_DIR}/doc/haartraining.htm")
-  endif()
-
-  # build lists of documentation files and generate table of contents for reference manual
-  set(DOC_FAKE_ROOT "${CMAKE_CURRENT_BINARY_DIR}/fake-root")
-  set(DOC_FAKE_ROOT_FILES "")
-
-  function(ocv_doc_add_file_to_fake_root source destination)
-    add_custom_command(
-      OUTPUT "${DOC_FAKE_ROOT}/${destination}"
-      COMMAND "${CMAKE_COMMAND}" -E copy "${source}" "${DOC_FAKE_ROOT}/${destination}"
-      DEPENDS "${source}"
-      COMMENT "Copying ${destination} to fake root..."
-      VERBATIM
-    )
-    list(APPEND DOC_FAKE_ROOT_FILES "${DOC_FAKE_ROOT}/${destination}")
-    set(DOC_FAKE_ROOT_FILES "${DOC_FAKE_ROOT_FILES}" PARENT_SCOPE)
-  endfunction()
-
-  function(ocv_doc_add_to_fake_root source)
-    if(ARGC GREATER 1)
-      set(destination "${ARGV1}")
-    else()
-      file(RELATIVE_PATH destination "${OpenCV_SOURCE_DIR}" "${source}")
-    endif()
-
-    if(IS_DIRECTORY "${source}")
-      file(GLOB_RECURSE files RELATIVE "${source}" "${source}/*")
-
-      foreach(file ${files})
-        ocv_doc_add_file_to_fake_root("${source}/${file}" "${destination}/${file}")
-      endforeach()
-    else()
-      ocv_doc_add_file_to_fake_root("${source}" "${destination}")
-    endif()
-
-    set(DOC_FAKE_ROOT_FILES "${DOC_FAKE_ROOT_FILES}" PARENT_SCOPE)
-  endfunction()
-
-  set(OPENCV_REFMAN_TOC "")
-
-  foreach(mod ${BASE_MODULES} ${EXTRA_MODULES})
-    if(EXISTS "${OPENCV_MODULE_opencv_${mod}_LOCATION}/doc/${mod}.rst")
-      ocv_doc_add_to_fake_root("${OPENCV_MODULE_opencv_${mod}_LOCATION}/doc" modules/${mod}/doc)
-      set(OPENCV_REFMAN_TOC "${OPENCV_REFMAN_TOC}   ${mod}/doc/${mod}.rst\n")
-    endif()
-  endforeach()
-
-  configure_file("${OpenCV_SOURCE_DIR}/modules/refman.rst.in" "${DOC_FAKE_ROOT}/modules/refman.rst" @ONLY)
-
-  ocv_doc_add_to_fake_root("${OpenCV_SOURCE_DIR}/index.rst")
-  ocv_doc_add_to_fake_root("${OpenCV_SOURCE_DIR}/doc")
-  ocv_doc_add_to_fake_root("${OpenCV_SOURCE_DIR}/platforms/android")
-  ocv_doc_add_to_fake_root("${OpenCV_SOURCE_DIR}/samples")
-
-  set(BUILD_PLANTUML "")
-  if(PLANTUML)
-    set(BUILD_PLANTUML "-tplantuml")
-  endif()
-
-  if(PDFLATEX_COMPILER)
-    add_custom_target(docs
-      COMMAND ${SPHINX_BUILD} ${BUILD_PLANTUML} -b latex -c "${CMAKE_CURRENT_SOURCE_DIR}" "${DOC_FAKE_ROOT}" .
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/mymath.sty ${CMAKE_CURRENT_BINARY_DIR}
-      COMMAND ${PYTHON_DEFAULT_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/patch_refman_latex.py" opencv2refman.tex
-      COMMAND ${PYTHON_DEFAULT_EXECUTABLE} "${CMAKE_CURRENT_SOURCE_DIR}/patch_refman_latex.py" opencv2manager.tex
-      COMMAND ${CMAKE_COMMAND} -E echo "Generating opencv2refman.pdf"
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv2refman.tex
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv2refman.tex
-      COMMAND ${CMAKE_COMMAND} -E echo "Generating opencv2manager.pdf"
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv2manager.tex
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv2manager.tex
-      COMMAND ${CMAKE_COMMAND} -E echo "Generating opencv_user.pdf"
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv_user.tex
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv_user.tex
-      COMMAND ${CMAKE_COMMAND} -E echo "Generating opencv_tutorials.pdf"
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv_tutorials.tex
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode opencv_tutorials.tex
-      COMMAND ${CMAKE_COMMAND} -E echo "Generating opencv_cheatsheet.pdf"
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode "${CMAKE_CURRENT_SOURCE_DIR}/opencv_cheatsheet.tex"
-      COMMAND ${PDFLATEX_COMPILER} -interaction=batchmode "${CMAKE_CURRENT_SOURCE_DIR}/opencv_cheatsheet.tex"
-      DEPENDS ${DOC_FAKE_ROOT_FILES}
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMENT "Generating the PDF Manuals"
-      )
-
-    LIST(APPEND OPTIONAL_DOC_LIST "${CMAKE_BINARY_DIR}/doc/opencv2refman.pdf" "${CMAKE_BINARY_DIR}/doc/opencv2manager.pdf"
-          "${CMAKE_BINARY_DIR}/doc/opencv_user.pdf" "${CMAKE_BINARY_DIR}/doc/opencv_tutorials.pdf" "${CMAKE_BINARY_DIR}/doc/opencv_cheatsheet.pdf")
-
-    if(ENABLE_SOLUTION_FOLDERS)
-      set_target_properties(docs PROPERTIES FOLDER "documentation")
-    endif()
-  endif()
-
-  add_custom_target(html_docs
-    COMMAND "${SPHINX_BUILD}" ${BUILD_PLANTUML} -b html -c "${CMAKE_CURRENT_SOURCE_DIR}" "${DOC_FAKE_ROOT}" ./_html
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/mymath.sty ${CMAKE_CURRENT_BINARY_DIR}
-    DEPENDS ${DOC_FAKE_ROOT_FILES}
-    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-    COMMENT "Generating Online Documentation"
-    )
-
-  if(ENABLE_SOLUTION_FOLDERS)
-    set_target_properties(html_docs PROPERTIES FOLDER "documentation")
-  endif()
-
-endif()
 
 # ========= Doxygen docs =========
 
-if(BUILD_DOCS AND HAVE_DOXYGEN)
+if(BUILD_DOCS AND DOXYGEN_FOUND)
   # not documented modules list
-  list(APPEND blacklist "ts" "java" "python2" "python3" "world")
+  list(APPEND blacklist "ts" "java" "python2" "python3" "world" "contrib_world")
+  unset(CMAKE_DOXYGEN_TUTORIAL_CONTRIB_ROOT)
 
   # gathering headers
   set(paths_include)
@@ -157,6 +42,7 @@ if(BUILD_DOCS AND HAVE_DOXYGEN)
   set(paths_bib)
   set(paths_sample)
   set(paths_tutorial)
+  set(paths_hal_interface)
   set(refs_main)
   set(refs_extra)
   set(deps)
@@ -186,7 +72,28 @@ if(BUILD_DOCS AND HAVE_DOXYGEN)
       if(EXISTS "${tutorial_dir}")
         list(APPEND paths_tutorial "${tutorial_dir}")
         list(APPEND deps ${tutorial_dir})
+
+        # tutorial reference entry
+        file(GLOB tutorials RELATIVE "${OPENCV_MODULE_opencv_${m}_LOCATION}" "${tutorial_dir}/*.markdown")
+        foreach (t ${tutorials})
+          if (NOT DEFINED CMAKE_DOXYGEN_TUTORIAL_CONTRIB_ROOT)
+            set(CMAKE_DOXYGEN_TUTORIAL_CONTRIB_ROOT "- @ref tutorial_contrib_root")
+            set(tutorial_contrib_root "${CMAKE_CURRENT_BINARY_DIR}/contrib_tutorials.markdown")
+            file(WRITE "${tutorial_contrib_root}"
+              "Tutorials for contrib modules {#tutorial_contrib_root}\n"
+              "=============================\n")
+          endif()
+          file(STRINGS "${OPENCV_MODULE_opencv_${m}_LOCATION}/${t}" tutorial_id LIMIT_COUNT 1 REGEX ".*{#[^}]+}")
+          string(REGEX REPLACE ".*{#([^}]+)}" "\\1" tutorial_id "${tutorial_id}")
+          file(APPEND "${tutorial_contrib_root}" "- ${m}. @subpage ${tutorial_id}\n")
+        endforeach()
       endif()
+      # HAL replacement file
+      set(replacement_header "${OPENCV_MODULE_opencv_${m}_LOCATION}/src/hal_replacement.hpp")
+      if(EXISTS "${replacement_header}")
+        list(APPEND paths_hal_interface "${replacement_header}")
+      endif()
+
       # BiBTeX file
       set(bib_file "${docs_dir}/${m}.bib")
       if(EXISTS "${bib_file}")
@@ -227,12 +134,11 @@ if(BUILD_DOCS AND HAVE_DOXYGEN)
   set(faqfile "${CMAKE_CURRENT_SOURCE_DIR}/faq.markdown")
   set(tutorial_path "${CMAKE_CURRENT_SOURCE_DIR}/tutorials")
   set(tutorial_py_path "${CMAKE_CURRENT_SOURCE_DIR}/py_tutorials")
-  set(user_guide_path "${CMAKE_CURRENT_SOURCE_DIR}/user_guide")
   set(example_path "${CMAKE_SOURCE_DIR}/samples")
 
   # set export variables
-  string(REPLACE ";" " \\\n" CMAKE_DOXYGEN_INPUT_LIST "${rootfile} ; ${faqfile} ; ${paths_include} ; ${paths_doc} ; ${tutorial_path} ; ${tutorial_py_path} ; ${user_guide_path} ; ${paths_tutorial}")
-  string(REPLACE ";" " \\\n" CMAKE_DOXYGEN_IMAGE_PATH "${paths_doc} ; ${tutorial_path} ; ${tutorial_py_path} ; ${user_guide_path} ; ${paths_tutorial}")
+  string(REPLACE ";" " \\\n" CMAKE_DOXYGEN_INPUT_LIST "${rootfile} ; ${faqfile} ; ${paths_include} ; ${paths_hal_interface} ; ${paths_doc} ; ${tutorial_path} ; ${tutorial_py_path} ; ${paths_tutorial} ; ${tutorial_contrib_root}")
+  string(REPLACE ";" " \\\n" CMAKE_DOXYGEN_IMAGE_PATH "${paths_doc} ; ${tutorial_path} ; ${tutorial_py_path} ; ${paths_tutorial}")
   # TODO: remove paths_doc from EXAMPLE_PATH after face module tutorials/samples moved to separate folders
   string(REPLACE ";" " \\\n" CMAKE_DOXYGEN_EXAMPLE_PATH  "${example_path} ; ${paths_doc} ; ${paths_sample}")
   set(CMAKE_DOXYGEN_LAYOUT "${CMAKE_CURRENT_SOURCE_DIR}/DoxygenLayout.xml")
@@ -240,29 +146,35 @@ if(BUILD_DOCS AND HAVE_DOXYGEN)
   set(CMAKE_DOXYGEN_MAIN_REFERENCE "${refs_main}")
   set(CMAKE_DOXYGEN_EXTRA_REFERENCE "${refs_extra}")
   set(CMAKE_EXTRA_BIB_FILES "${bibfile} ${paths_bib}")
+  if (CMAKE_DOXYGEN_GENERATE_QHP)
+    set(CMAKE_DOXYGEN_GENERATE_QHP "YES")
+  else()
+    set(CMAKE_DOXYGEN_GENERATE_QHP "NO")
+  endif()
+
+  list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/opencv.ico")
+  list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/pattern.png")
+  list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/acircles_pattern.png")
+  list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/bodybg.png")
+  list(APPEND CMAKE_DOXYGEN_HTML_FILES "${CMAKE_CURRENT_SOURCE_DIR}/mymath.sty")
+  string(REPLACE ";" " \\\n" CMAKE_DOXYGEN_HTML_FILES "${CMAKE_DOXYGEN_HTML_FILES}")
+
+  if(PLANTUML_JAR)
+    set(CMAKE_DOXYGEN_PLANTUML_SUPPORT "PLANTUML_JAR_PATH      = ${PLANTUML_JAR}\n")
+  else()
+    set(CMAKE_DOXYGEN_PLANTUML_SUPPORT "ALIASES               += startuml{1}=\"@warning __No plantuml!__ \\n \\n @if DUMMY_PLANTUML_CODE\" enduml=\"@endif\"\n")
+  endif()
 
   # writing file
   configure_file(Doxyfile.in ${doxyfile} @ONLY)
   configure_file(root.markdown.in ${rootfile} @ONLY)
-  configure_file(mymath.sty "${CMAKE_DOXYGEN_OUTPUT_PATH}/html/mymath.sty" @ONLY)
-  configure_file(mymath.sty "${CMAKE_DOXYGEN_OUTPUT_PATH}/latex/mymath.sty" @ONLY)
 
-  # TODO: do not store downloadable samples, but give github link instead
   add_custom_target(doxygen
-    COMMAND "${CMAKE_COMMAND}" -E copy_directory "${CMAKE_SOURCE_DIR}/samples" "${CMAKE_DOXYGEN_OUTPUT_PATH}/html/samples"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/pattern.png" "${CMAKE_DOXYGEN_OUTPUT_PATH}/html"
-    COMMAND "${CMAKE_COMMAND}" -E copy "${CMAKE_CURRENT_SOURCE_DIR}/acircles_pattern.png" "${CMAKE_DOXYGEN_OUTPUT_PATH}/html"
-    COMMAND ${DOXYGEN_BUILD} ${doxyfile}
+    COMMAND ${DOXYGEN_EXECUTABLE} ${doxyfile}
     DEPENDS ${doxyfile} ${rootfile} ${bibfile} ${deps}
   )
+  install(DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/doxygen/html
+    DESTINATION "${OPENCV_DOC_INSTALL_PATH}"
+    COMPONENT "docs" OPTIONAL
+  )
 endif()
-
-if(HAVE_DOC_GENERATOR)
-  # installation
-  foreach(f ${DOC_LIST})
-    install(FILES "${f}" DESTINATION "${OPENCV_DOC_INSTALL_PATH}" COMPONENT docs)
-  endforeach()
-  foreach(f ${OPTIONAL_DOC_LIST})
-    install(FILES "${f}" DESTINATION "${OPENCV_DOC_INSTALL_PATH}" OPTIONAL COMPONENT docs)
-  endforeach()
-endif(HAVE_DOC_GENERATOR)

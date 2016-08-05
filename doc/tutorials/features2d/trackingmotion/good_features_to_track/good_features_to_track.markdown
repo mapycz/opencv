@@ -15,7 +15,7 @@ Code
 ----
 
 This tutorial code's is shown lines below. You can also download it from
-[here](https://github.com/Itseez/opencv/tree/master/samples/cpp/tutorial_code/TrackingMotion/goodFeaturesToTrack_Demo.cpp)
+[here](https://github.com/opencv/opencv/tree/master/samples/cpp/tutorial_code/TrackingMotion/goodFeaturesToTrack_Demo.cpp)
 @code{.cpp}
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
@@ -96,7 +96,7 @@ void goodFeaturesToTrack_Demo( int, void* )
   /// Draw corners detected
   cout<<"** Number of corners detected: "<<corners.size()<<endl;
   int r = 4;
-  for( int i = 0; i < corners.size(); i++ )
+  for( size_t i = 0; i < corners.size(); i++ )
      { circle( copy, corners[i], r, Scalar(rng.uniform(0,255), rng.uniform(0,255),
               rng.uniform(0,255)), -1, 8, 0 ); }
 

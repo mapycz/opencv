@@ -83,8 +83,8 @@
 #  include "opencv2/cudafeatures2d.hpp"
 #endif
 
-#ifdef HAVE_OPENCV_CUDA
-#  include "opencv2/cuda.hpp"
+#ifdef HAVE_OPENCV_CUDALEGACY
+#  include "opencv2/cudalegacy.hpp"
 #endif
 
 #ifdef HAVE_OPENCV_XFEATURES2D
@@ -98,5 +98,7 @@
 #ifdef HAVE_TEGRA_OPTIMIZATION
 # include "opencv2/stitching/stitching_tegra.hpp"
 #endif
+
+#include "util_log.hpp"
 
 #endif

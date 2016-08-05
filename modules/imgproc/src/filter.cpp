@@ -41,13 +41,15 @@
 //M*/
 
 #include "precomp.hpp"
+#include "opencv2/core/opencl/ocl_defs.hpp"
 #include "opencl_kernels_imgproc.hpp"
+#include "hal_replacement.hpp"
 
 /****************************************************************************************\
                                     Base Image Filter
 \****************************************************************************************/
 
-#if IPP_VERSION_X100 >= 701
+#if IPP_VERSION_X100 >= 710
 #define USE_IPP_SEP_FILTERS 1
 #else
 #undef USE_IPP_SEP_FILTERS
@@ -158,12 +160,12 @@ void FilterEngine::init( const Ptr<BaseFilter>& _filter2D,
 
 #define VEC_ALIGN CV_MALLOC_ALIGN
 
-int FilterEngine::start(Size _wholeSize, Rect _roi, int _maxBufRows)
+int FilterEngine::start(const Size &_wholeSize, const Size &sz, const Point &ofs)
 {
     int i, j;
 
     wholeSize = _wholeSize;
-    roi = _roi;
+    roi = Rect(ofs, sz);
     CV_Assert( roi.x >= 0 && roi.y >= 0 && roi.width >= 0 && roi.height >= 0 &&
         roi.x + roi.width <= wholeSize.width &&
         roi.y + roi.height <= wholeSize.height );
@@ -172,9 +174,9 @@ int FilterEngine::start(Size _wholeSize, Rect _roi, int _maxBufRows)
     int bufElemSize = (int)getElemSize(bufType);
     const uchar* constVal = !constBorderValue.empty() ? &constBorderValue[0] : 0;
 
-    if( _maxBufRows < 0 )
-        _maxBufRows = ksize.height + 3;
-    _maxBufRows = std::max(_maxBufRows, std::max(anchor.y, ksize.height-anchor.y-1)*2+1);
+    int _maxBufRows = std::max(ksize.height + 3,
+                               std::max(anchor.y,
+                                        ksize.height-anchor.y-1)*2+1);
 
     if( maxWidth < roi.width || _maxBufRows != (int)rows.size() )
     {
@@ -260,28 +262,11 @@ int FilterEngine::start(Size _wholeSize, Rect _roi, int _maxBufRows)
 }
 
 
-int FilterEngine::start(const Mat& src, const Rect& _srcRoi,
-                        bool isolated, int maxBufRows)
+int FilterEngine::start(const Mat& src, const Size &wsz, const Point &ofs)
 {
-    Rect srcRoi = _srcRoi;
-
-    if( srcRoi == Rect(0,0,-1,-1) )
-        srcRoi = Rect(0,0,src.cols,src.rows);
-
-    CV_Assert( srcRoi.x >= 0 && srcRoi.y >= 0 &&
-        srcRoi.width >= 0 && srcRoi.height >= 0 &&
-        srcRoi.x + srcRoi.width <= src.cols &&
-        srcRoi.y + srcRoi.height <= src.rows );
-
-    Point ofs;
-    Size wsz(src.cols, src.rows);
-    if( !isolated )
-        src.locateROI( wsz, ofs );
-    start( wsz, srcRoi + ofs, maxBufRows );
-
+    start( wsz, src.size(), ofs);
     return startY - ofs.y;
 }
-
 
 int FilterEngine::remainingInputRows() const
 {
@@ -392,28 +377,16 @@ int FilterEngine::proceed( const uchar* src, int srcstep, int count,
     return dy;
 }
 
-
-void FilterEngine::apply(const Mat& src, Mat& dst,
-    const Rect& _srcRoi, Point dstOfs, bool isolated)
+void FilterEngine::apply(const Mat& src, Mat& dst, const Size & wsz, const Point & ofs)
 {
     CV_Assert( src.type() == srcType && dst.type() == dstType );
 
-    Rect srcRoi = _srcRoi;
-    if( srcRoi == Rect(0,0,-1,-1) )
-        srcRoi = Rect(0,0,src.cols,src.rows);
-
-    if( srcRoi.area() == 0 )
-        return;
-
-    CV_Assert( dstOfs.x >= 0 && dstOfs.y >= 0 &&
-        dstOfs.x + srcRoi.width <= dst.cols &&
-        dstOfs.y + srcRoi.height <= dst.rows );
-
-    int y = start(src, srcRoi, isolated);
-    proceed( src.ptr() + y*src.step + srcRoi.x*src.elemSize(),
-             (int)src.step, endY - startY,
-             dst.ptr(dstOfs.y) +
-             dstOfs.x*dst.elemSize(), (int)dst.step );
+    int y = start(src, wsz, ofs);
+    proceed(src.ptr() + y*src.step,
+            (int)src.step,
+            endY - startY,
+            dst.ptr(),
+            (int)dst.step );
 }
 
 }
@@ -533,56 +506,52 @@ struct RowVec_8u32s
 
         if( smallValues )
         {
-            for( ; i <= width - 16; i += 16 )
+            __m128i z = _mm_setzero_si128();
+            for( ; i <= width - 8; i += 8 )
             {
                 const uchar* src = _src + i;
-                __m128i f, z = _mm_setzero_si128(), s0 = z, s1 = z, s2 = z, s3 = z;
-                __m128i x0, x1, x2, x3;
+                __m128i s0 = z, s1 = z;
 
                 for( k = 0; k < _ksize; k++, src += cn )
                 {
-                    f = _mm_cvtsi32_si128(_kx[k]);
+                    __m128i f = _mm_cvtsi32_si128(_kx[k]);
                     f = _mm_shuffle_epi32(f, 0);
-                    f = _mm_packs_epi32(f, f);
 
-                    x0 = _mm_loadu_si128((const __m128i*)src);
-                    x2 = _mm_unpackhi_epi8(x0, z);
+                    __m128i x0 = _mm_loadl_epi64((const __m128i*)src);
                     x0 = _mm_unpacklo_epi8(x0, z);
-                    x1 = _mm_mulhi_epi16(x0, f);
-                    x3 = _mm_mulhi_epi16(x2, f);
-                    x0 = _mm_mullo_epi16(x0, f);
-                    x2 = _mm_mullo_epi16(x2, f);
 
-                    s0 = _mm_add_epi32(s0, _mm_unpacklo_epi16(x0, x1));
-                    s1 = _mm_add_epi32(s1, _mm_unpackhi_epi16(x0, x1));
-                    s2 = _mm_add_epi32(s2, _mm_unpacklo_epi16(x2, x3));
-                    s3 = _mm_add_epi32(s3, _mm_unpackhi_epi16(x2, x3));
+                    __m128i x1 = _mm_unpackhi_epi16(x0, z);
+                    x0 = _mm_unpacklo_epi16(x0, z);
+
+                    x0 = _mm_madd_epi16(x0, f);
+                    x1 = _mm_madd_epi16(x1, f);
+
+                    s0 = _mm_add_epi32(s0, x0);
+                    s1 = _mm_add_epi32(s1, x1);
                 }
 
                 _mm_store_si128((__m128i*)(dst + i), s0);
                 _mm_store_si128((__m128i*)(dst + i + 4), s1);
-                _mm_store_si128((__m128i*)(dst + i + 8), s2);
-                _mm_store_si128((__m128i*)(dst + i + 12), s3);
             }
 
-            for( ; i <= width - 4; i += 4 )
+            if( i <= width - 4 )
             {
                 const uchar* src = _src + i;
-                __m128i f, z = _mm_setzero_si128(), s0 = z, x0, x1;
+                __m128i s0 = z;
 
                 for( k = 0; k < _ksize; k++, src += cn )
                 {
-                    f = _mm_cvtsi32_si128(_kx[k]);
+                    __m128i f = _mm_cvtsi32_si128(_kx[k]);
                     f = _mm_shuffle_epi32(f, 0);
-                    f = _mm_packs_epi32(f, f);
 
-                    x0 = _mm_cvtsi32_si128(*(const int*)src);
+                    __m128i x0 = _mm_cvtsi32_si128(*(const int*)src);
                     x0 = _mm_unpacklo_epi8(x0, z);
-                    x1 = _mm_mulhi_epi16(x0, f);
-                    x0 = _mm_mullo_epi16(x0, f);
-                    s0 = _mm_add_epi32(s0, _mm_unpacklo_epi16(x0, x1));
+                    x0 = _mm_unpacklo_epi16(x0, z);
+                    x0 = _mm_madd_epi16(x0, f);
+                    s0 = _mm_add_epi32(s0, x0);
                 }
                 _mm_store_si128((__m128i*)(dst + i), s0);
+                i += 4;
             }
         }
         return i;
@@ -679,41 +648,30 @@ struct SymmRowSmallVec_8u32s
                 {
                     __m128i k0 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[0]), 0),
                             k1 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[1]), 0);
-                    k0 = _mm_packs_epi32(k0, k0);
                     k1 = _mm_packs_epi32(k1, k1);
 
-                    for( ; i <= width - 16; i += 16, src += 16 )
+                    for( ; i <= width - 8; i += 8, src += 8 )
                     {
-                        __m128i x0, x1, x2, y0, y1, t0, t1, z0, z1, z2, z3;
-                        x0 = _mm_loadu_si128((__m128i*)(src - cn));
-                        x1 = _mm_loadu_si128((__m128i*)src);
-                        x2 = _mm_loadu_si128((__m128i*)(src + cn));
-                        y0 = _mm_add_epi16(_mm_unpackhi_epi8(x0, z), _mm_unpackhi_epi8(x2, z));
-                        x0 = _mm_add_epi16(_mm_unpacklo_epi8(x0, z), _mm_unpacklo_epi8(x2, z));
-                        y1 = _mm_unpackhi_epi8(x1, z);
+                        __m128i x0 = _mm_loadl_epi64((__m128i*)(src - cn));
+                        __m128i x1 = _mm_loadl_epi64((__m128i*)src);
+                        __m128i x2 = _mm_loadl_epi64((__m128i*)(src + cn));
+
+                        x0 = _mm_unpacklo_epi8(x0, z);
                         x1 = _mm_unpacklo_epi8(x1, z);
+                        x2 = _mm_unpacklo_epi8(x2, z);
+                        __m128i x3 = _mm_unpacklo_epi16(x0, x2);
+                        __m128i x4 = _mm_unpackhi_epi16(x0, x2);
+                        __m128i x5 = _mm_unpacklo_epi16(x1, z);
+                        __m128i x6 = _mm_unpackhi_epi16(x1, z);
+                        x3 = _mm_madd_epi16(x3, k1);
+                        x4 = _mm_madd_epi16(x4, k1);
+                        x5 = _mm_madd_epi16(x5, k0);
+                        x6 = _mm_madd_epi16(x6, k0);
+                        x3 = _mm_add_epi32(x3, x5);
+                        x4 = _mm_add_epi32(x4, x6);
 
-                        t1 = _mm_mulhi_epi16(x1, k0);
-                        t0 = _mm_mullo_epi16(x1, k0);
-                        x2 = _mm_mulhi_epi16(x0, k1);
-                        x0 = _mm_mullo_epi16(x0, k1);
-                        z0 = _mm_unpacklo_epi16(t0, t1);
-                        z1 = _mm_unpackhi_epi16(t0, t1);
-                        z0 = _mm_add_epi32(z0, _mm_unpacklo_epi16(x0, x2));
-                        z1 = _mm_add_epi32(z1, _mm_unpackhi_epi16(x0, x2));
-
-                        t1 = _mm_mulhi_epi16(y1, k0);
-                        t0 = _mm_mullo_epi16(y1, k0);
-                        y1 = _mm_mulhi_epi16(y0, k1);
-                        y0 = _mm_mullo_epi16(y0, k1);
-                        z2 = _mm_unpacklo_epi16(t0, t1);
-                        z3 = _mm_unpackhi_epi16(t0, t1);
-                        z2 = _mm_add_epi32(z2, _mm_unpacklo_epi16(y0, y1));
-                        z3 = _mm_add_epi32(z3, _mm_unpackhi_epi16(y0, y1));
-                        _mm_store_si128((__m128i*)(dst + i), z0);
-                        _mm_store_si128((__m128i*)(dst + i + 4), z1);
-                        _mm_store_si128((__m128i*)(dst + i + 8), z2);
-                        _mm_store_si128((__m128i*)(dst + i + 12), z3);
+                        _mm_store_si128((__m128i*)(dst + i), x3);
+                        _mm_store_si128((__m128i*)(dst + i + 4), x4);
                     }
                 }
             }
@@ -744,57 +702,45 @@ struct SymmRowSmallVec_8u32s
                     __m128i k0 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[0]), 0),
                             k1 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[1]), 0),
                             k2 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[2]), 0);
-                    k0 = _mm_packs_epi32(k0, k0);
                     k1 = _mm_packs_epi32(k1, k1);
                     k2 = _mm_packs_epi32(k2, k2);
 
-                    for( ; i <= width - 16; i += 16, src += 16 )
+                    for( ; i <= width - 8; i += 8, src += 8 )
                     {
-                        __m128i x0, x1, x2, y0, y1, t0, t1, z0, z1, z2, z3;
-                        x0 = _mm_loadu_si128((__m128i*)(src - cn));
-                        x1 = _mm_loadu_si128((__m128i*)src);
-                        x2 = _mm_loadu_si128((__m128i*)(src + cn));
-                        y0 = _mm_add_epi16(_mm_unpackhi_epi8(x0, z), _mm_unpackhi_epi8(x2, z));
-                        x0 = _mm_add_epi16(_mm_unpacklo_epi8(x0, z), _mm_unpacklo_epi8(x2, z));
-                        y1 = _mm_unpackhi_epi8(x1, z);
-                        x1 = _mm_unpacklo_epi8(x1, z);
+                        __m128i x0 = _mm_loadl_epi64((__m128i*)src);
 
-                        t1 = _mm_mulhi_epi16(x1, k0);
-                        t0 = _mm_mullo_epi16(x1, k0);
-                        x2 = _mm_mulhi_epi16(x0, k1);
-                        x0 = _mm_mullo_epi16(x0, k1);
-                        z0 = _mm_unpacklo_epi16(t0, t1);
-                        z1 = _mm_unpackhi_epi16(t0, t1);
-                        z0 = _mm_add_epi32(z0, _mm_unpacklo_epi16(x0, x2));
-                        z1 = _mm_add_epi32(z1, _mm_unpackhi_epi16(x0, x2));
+                        x0 = _mm_unpacklo_epi8(x0, z);
+                        __m128i x1 = _mm_unpacklo_epi16(x0, z);
+                        __m128i x2 = _mm_unpackhi_epi16(x0, z);
+                        x1 = _mm_madd_epi16(x1, k0);
+                        x2 = _mm_madd_epi16(x2, k0);
 
-                        t1 = _mm_mulhi_epi16(y1, k0);
-                        t0 = _mm_mullo_epi16(y1, k0);
-                        y1 = _mm_mulhi_epi16(y0, k1);
-                        y0 = _mm_mullo_epi16(y0, k1);
-                        z2 = _mm_unpacklo_epi16(t0, t1);
-                        z3 = _mm_unpackhi_epi16(t0, t1);
-                        z2 = _mm_add_epi32(z2, _mm_unpacklo_epi16(y0, y1));
-                        z3 = _mm_add_epi32(z3, _mm_unpackhi_epi16(y0, y1));
+                        __m128i x3 = _mm_loadl_epi64((__m128i*)(src - cn));
+                        __m128i x4 = _mm_loadl_epi64((__m128i*)(src + cn));
 
-                        x0 = _mm_loadu_si128((__m128i*)(src - cn*2));
-                        x1 = _mm_loadu_si128((__m128i*)(src + cn*2));
-                        y1 = _mm_add_epi16(_mm_unpackhi_epi8(x0, z), _mm_unpackhi_epi8(x1, z));
-                        y0 = _mm_add_epi16(_mm_unpacklo_epi8(x0, z), _mm_unpacklo_epi8(x1, z));
+                        x3 = _mm_unpacklo_epi8(x3, z);
+                        x4 = _mm_unpacklo_epi8(x4, z);
+                        __m128i x5 = _mm_unpacklo_epi16(x3, x4);
+                        __m128i x6 = _mm_unpackhi_epi16(x3, x4);
+                        x5 = _mm_madd_epi16(x5, k1);
+                        x6 = _mm_madd_epi16(x6, k1);
+                        x1 = _mm_add_epi32(x1, x5);
+                        x2 = _mm_add_epi32(x2, x6);
 
-                        t1 = _mm_mulhi_epi16(y0, k2);
-                        t0 = _mm_mullo_epi16(y0, k2);
-                        y0 = _mm_mullo_epi16(y1, k2);
-                        y1 = _mm_mulhi_epi16(y1, k2);
-                        z0 = _mm_add_epi32(z0, _mm_unpacklo_epi16(t0, t1));
-                        z1 = _mm_add_epi32(z1, _mm_unpackhi_epi16(t0, t1));
-                        z2 = _mm_add_epi32(z2, _mm_unpacklo_epi16(y0, y1));
-                        z3 = _mm_add_epi32(z3, _mm_unpackhi_epi16(y0, y1));
+                        x3 = _mm_loadl_epi64((__m128i*)(src - cn*2));
+                        x4 = _mm_loadl_epi64((__m128i*)(src + cn*2));
 
-                        _mm_store_si128((__m128i*)(dst + i), z0);
-                        _mm_store_si128((__m128i*)(dst + i + 4), z1);
-                        _mm_store_si128((__m128i*)(dst + i + 8), z2);
-                        _mm_store_si128((__m128i*)(dst + i + 12), z3);
+                        x3 = _mm_unpacklo_epi8(x3, z);
+                        x4 = _mm_unpacklo_epi8(x4, z);
+                        x5 = _mm_unpacklo_epi16(x3, x4);
+                        x6 = _mm_unpackhi_epi16(x3, x4);
+                        x5 = _mm_madd_epi16(x5, k2);
+                        x6 = _mm_madd_epi16(x6, k2);
+                        x1 = _mm_add_epi32(x1, x5);
+                        x2 = _mm_add_epi32(x2, x6);
+
+                        _mm_store_si128((__m128i*)(dst + i), x1);
+                        _mm_store_si128((__m128i*)(dst + i + 4), x2);
                     }
                 }
             }
@@ -818,77 +764,75 @@ struct SymmRowSmallVec_8u32s
                     }
                 else
                 {
-                    __m128i k1 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[1]), 0);
-                    k1 = _mm_packs_epi32(k1, k1);
+                    __m128i k0 = _mm_set_epi32(-kx[1], kx[1], -kx[1], kx[1]);
+                    k0 = _mm_packs_epi32(k0, k0);
 
                     for( ; i <= width - 16; i += 16, src += 16 )
                     {
-                        __m128i x0, x1, y0, y1, z0, z1, z2, z3;
-                        x0 = _mm_loadu_si128((__m128i*)(src + cn));
-                        x1 = _mm_loadu_si128((__m128i*)(src - cn));
-                        y0 = _mm_sub_epi16(_mm_unpackhi_epi8(x0, z), _mm_unpackhi_epi8(x1, z));
-                        x0 = _mm_sub_epi16(_mm_unpacklo_epi8(x0, z), _mm_unpacklo_epi8(x1, z));
+                        __m128i x0 = _mm_loadu_si128((__m128i*)(src + cn));
+                        __m128i x1 = _mm_loadu_si128((__m128i*)(src - cn));
 
-                        x1 = _mm_mulhi_epi16(x0, k1);
-                        x0 = _mm_mullo_epi16(x0, k1);
-                        z0 = _mm_unpacklo_epi16(x0, x1);
-                        z1 = _mm_unpackhi_epi16(x0, x1);
+                        __m128i x2 = _mm_unpacklo_epi8(x0, z);
+                        __m128i x3 = _mm_unpacklo_epi8(x1, z);
+                        __m128i x4 = _mm_unpackhi_epi8(x0, z);
+                        __m128i x5 = _mm_unpackhi_epi8(x1, z);
+                        __m128i x6 = _mm_unpacklo_epi16(x2, x3);
+                        __m128i x7 = _mm_unpacklo_epi16(x4, x5);
+                        __m128i x8 = _mm_unpackhi_epi16(x2, x3);
+                        __m128i x9 = _mm_unpackhi_epi16(x4, x5);
+                        x6 = _mm_madd_epi16(x6, k0);
+                        x7 = _mm_madd_epi16(x7, k0);
+                        x8 = _mm_madd_epi16(x8, k0);
+                        x9 = _mm_madd_epi16(x9, k0);
 
-                        y1 = _mm_mulhi_epi16(y0, k1);
-                        y0 = _mm_mullo_epi16(y0, k1);
-                        z2 = _mm_unpacklo_epi16(y0, y1);
-                        z3 = _mm_unpackhi_epi16(y0, y1);
-                        _mm_store_si128((__m128i*)(dst + i), z0);
-                        _mm_store_si128((__m128i*)(dst + i + 4), z1);
-                        _mm_store_si128((__m128i*)(dst + i + 8), z2);
-                        _mm_store_si128((__m128i*)(dst + i + 12), z3);
+                        _mm_store_si128((__m128i*)(dst + i), x6);
+                        _mm_store_si128((__m128i*)(dst + i + 4), x8);
+                        _mm_store_si128((__m128i*)(dst + i + 8), x7);
+                        _mm_store_si128((__m128i*)(dst + i + 12), x9);
                     }
                 }
             }
             else if( _ksize == 5 )
             {
-                __m128i k0 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[0]), 0),
-                        k1 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[1]), 0),
-                        k2 = _mm_shuffle_epi32(_mm_cvtsi32_si128(kx[2]), 0);
+                __m128i k0 = _mm_loadl_epi64((__m128i*)(kx + 1));
+                k0 = _mm_unpacklo_epi64(k0, k0);
                 k0 = _mm_packs_epi32(k0, k0);
-                k1 = _mm_packs_epi32(k1, k1);
-                k2 = _mm_packs_epi32(k2, k2);
 
                 for( ; i <= width - 16; i += 16, src += 16 )
                 {
-                    __m128i x0, x1, x2, y0, y1, t0, t1, z0, z1, z2, z3;
-                    x0 = _mm_loadu_si128((__m128i*)(src + cn));
-                    x2 = _mm_loadu_si128((__m128i*)(src - cn));
-                    y0 = _mm_sub_epi16(_mm_unpackhi_epi8(x0, z), _mm_unpackhi_epi8(x2, z));
-                    x0 = _mm_sub_epi16(_mm_unpacklo_epi8(x0, z), _mm_unpacklo_epi8(x2, z));
+                    __m128i x0 = _mm_loadu_si128((__m128i*)(src + cn));
+                    __m128i x1 = _mm_loadu_si128((__m128i*)(src - cn));
 
-                    x2 = _mm_mulhi_epi16(x0, k1);
-                    x0 = _mm_mullo_epi16(x0, k1);
-                    z0 = _mm_unpacklo_epi16(x0, x2);
-                    z1 = _mm_unpackhi_epi16(x0, x2);
-                    y1 = _mm_mulhi_epi16(y0, k1);
-                    y0 = _mm_mullo_epi16(y0, k1);
-                    z2 = _mm_unpacklo_epi16(y0, y1);
-                    z3 = _mm_unpackhi_epi16(y0, y1);
+                    __m128i x2 = _mm_unpackhi_epi8(x0, z);
+                    __m128i x3 = _mm_unpackhi_epi8(x1, z);
+                    x0 = _mm_unpacklo_epi8(x0, z);
+                    x1 = _mm_unpacklo_epi8(x1, z);
+                    __m128i x5 = _mm_sub_epi16(x2, x3);
+                    __m128i x4 = _mm_sub_epi16(x0, x1);
 
-                    x0 = _mm_loadu_si128((__m128i*)(src + cn*2));
-                    x1 = _mm_loadu_si128((__m128i*)(src - cn*2));
-                    y1 = _mm_sub_epi16(_mm_unpackhi_epi8(x0, z), _mm_unpackhi_epi8(x1, z));
-                    y0 = _mm_sub_epi16(_mm_unpacklo_epi8(x0, z), _mm_unpacklo_epi8(x1, z));
+                    __m128i x6 = _mm_loadu_si128((__m128i*)(src + cn * 2));
+                    __m128i x7 = _mm_loadu_si128((__m128i*)(src - cn * 2));
 
-                    t1 = _mm_mulhi_epi16(y0, k2);
-                    t0 = _mm_mullo_epi16(y0, k2);
-                    y0 = _mm_mullo_epi16(y1, k2);
-                    y1 = _mm_mulhi_epi16(y1, k2);
-                    z0 = _mm_add_epi32(z0, _mm_unpacklo_epi16(t0, t1));
-                    z1 = _mm_add_epi32(z1, _mm_unpackhi_epi16(t0, t1));
-                    z2 = _mm_add_epi32(z2, _mm_unpacklo_epi16(y0, y1));
-                    z3 = _mm_add_epi32(z3, _mm_unpackhi_epi16(y0, y1));
+                    __m128i x8 = _mm_unpackhi_epi8(x6, z);
+                    __m128i x9 = _mm_unpackhi_epi8(x7, z);
+                    x6 = _mm_unpacklo_epi8(x6, z);
+                    x7 = _mm_unpacklo_epi8(x7, z);
+                    __m128i x11 = _mm_sub_epi16(x8, x9);
+                    __m128i x10 = _mm_sub_epi16(x6, x7);
 
-                    _mm_store_si128((__m128i*)(dst + i), z0);
-                    _mm_store_si128((__m128i*)(dst + i + 4), z1);
-                    _mm_store_si128((__m128i*)(dst + i + 8), z2);
-                    _mm_store_si128((__m128i*)(dst + i + 12), z3);
+                    __m128i x13 = _mm_unpackhi_epi16(x5, x11);
+                    __m128i x12 = _mm_unpackhi_epi16(x4, x10);
+                    x5 = _mm_unpacklo_epi16(x5, x11);
+                    x4 = _mm_unpacklo_epi16(x4, x10);
+                    x5 = _mm_madd_epi16(x5, k0);
+                    x4 = _mm_madd_epi16(x4, k0);
+                    x13 = _mm_madd_epi16(x13, k0);
+                    x12 = _mm_madd_epi16(x12, k0);
+
+                    _mm_store_si128((__m128i*)(dst + i), x4);
+                    _mm_store_si128((__m128i*)(dst + i + 4), x12);
+                    _mm_store_si128((__m128i*)(dst + i + 8), x5);
+                    _mm_store_si128((__m128i*)(dst + i + 12), x13);
                 }
             }
         }
@@ -897,19 +841,18 @@ struct SymmRowSmallVec_8u32s
         kx -= _ksize/2;
         for( ; i <= width - 4; i += 4, src += 4 )
         {
-            __m128i f, s0 = z, x0, x1;
+            __m128i s0 = z;
 
             for( k = j = 0; k < _ksize; k++, j += cn )
             {
-                f = _mm_cvtsi32_si128(kx[k]);
+                __m128i f = _mm_cvtsi32_si128(kx[k]);
                 f = _mm_shuffle_epi32(f, 0);
-                f = _mm_packs_epi32(f, f);
 
-                x0 = _mm_cvtsi32_si128(*(const int*)(src + j));
+                __m128i x0 = _mm_cvtsi32_si128(*(const int*)(src + j));
                 x0 = _mm_unpacklo_epi8(x0, z);
-                x1 = _mm_mulhi_epi16(x0, f);
-                x0 = _mm_mullo_epi16(x0, f);
-                s0 = _mm_add_epi32(s0, _mm_unpacklo_epi16(x0, x1));
+                x0 = _mm_unpacklo_epi16(x0, z);
+                x0 = _mm_madd_epi16(x0, f);
+                s0 = _mm_add_epi32(s0, x0);
             }
             _mm_store_si128((__m128i*)(dst + i), s0);
         }
@@ -1415,14 +1358,14 @@ struct RowVec_32f
     {
         kernel = _kernel;
         haveSSE = checkHardwareSupport(CV_CPU_SSE);
-#if defined USE_IPP_SEP_FILTERS && 0
+#if defined USE_IPP_SEP_FILTERS && IPP_DISABLE_BLOCK
         bufsz = -1;
 #endif
     }
 
     int operator()(const uchar* _src, uchar* _dst, int width, int cn) const
     {
-#if defined USE_IPP_SEP_FILTERS && 0
+#if defined USE_IPP_SEP_FILTERS && IPP_DISABLE_BLOCK
         CV_IPP_CHECK()
         {
             int ret = ippiOperator(_src, _dst, width, cn);
@@ -1463,7 +1406,7 @@ struct RowVec_32f
 
     Mat kernel;
     bool haveSSE;
-#if defined USE_IPP_SEP_FILTERS && 0
+#if defined USE_IPP_SEP_FILTERS && IPP_DISABLE_BLOCK
 private:
     mutable int bufsz;
     int ippiOperator(const uchar* _src, uchar* _dst, int width, int cn) const
@@ -2207,6 +2150,846 @@ struct FilterVec_32f
 };
 
 
+#elif CV_NEON
+
+struct SymmRowSmallVec_8u32s
+{
+    SymmRowSmallVec_8u32s() { smallValues = false; }
+    SymmRowSmallVec_8u32s( const Mat& _kernel, int _symmetryType )
+    {
+        kernel = _kernel;
+        symmetryType = _symmetryType;
+        smallValues = true;
+        int k, ksize = kernel.rows + kernel.cols - 1;
+        for( k = 0; k < ksize; k++ )
+        {
+            int v = kernel.ptr<int>()[k];
+            if( v < SHRT_MIN || v > SHRT_MAX )
+            {
+                smallValues = false;
+                break;
+            }
+        }
+    }
+
+    int operator()(const uchar* src, uchar* _dst, int width, int cn) const
+    {
+         if( !checkHardwareSupport(CV_CPU_NEON) )
+             return 0;
+
+        int i = 0, _ksize = kernel.rows + kernel.cols - 1;
+        int* dst = (int*)_dst;
+        bool symmetrical = (symmetryType & KERNEL_SYMMETRICAL) != 0;
+        const int* kx = kernel.ptr<int>() + _ksize/2;
+        if( !smallValues )
+            return 0;
+
+        src += (_ksize/2)*cn;
+        width *= cn;
+
+        if( symmetrical )
+        {
+            if( _ksize == 1 )
+                return 0;
+            if( _ksize == 3 )
+            {
+                if( kx[0] == 2 && kx[1] == 1 )
+                {
+                    uint16x8_t zq = vdupq_n_u16(0);
+
+                    for( ; i <= width - 8; i += 8, src += 8 )
+                    {
+                        uint8x8_t x0, x1, x2;
+                        x0 = vld1_u8( (uint8_t *) (src - cn) );
+                        x1 = vld1_u8( (uint8_t *) (src) );
+                        x2 = vld1_u8( (uint8_t *) (src + cn) );
+
+                        uint16x8_t y0, y1, y2;
+                        y0 = vaddl_u8(x0, x2);
+                        y1 = vshll_n_u8(x1, 1);
+                        y2 = vaddq_u16(y0, y1);
+
+                        uint16x8x2_t str;
+                        str.val[0] = y2; str.val[1] = zq;
+                        vst2q_u16( (uint16_t *) (dst + i), str );
+                    }
+                }
+                else if( kx[0] == -2 && kx[1] == 1 )
+                    return 0;
+                else
+                {
+                    int32x4_t k32 = vdupq_n_s32(0);
+                    k32 = vld1q_lane_s32(kx, k32, 0);
+                    k32 = vld1q_lane_s32(kx + 1, k32, 1);
+
+                    int16x4_t k = vqmovn_s32(k32);
+
+                    uint8x8_t z = vdup_n_u8(0);
+
+                    for( ; i <= width - 8; i += 8, src += 8 )
+                    {
+                        uint8x8_t x0, x1, x2;
+                        x0 = vld1_u8( (uint8_t *) (src - cn) );
+                        x1 = vld1_u8( (uint8_t *) (src) );
+                        x2 = vld1_u8( (uint8_t *) (src + cn) );
+
+                        int16x8_t y0, y1;
+                        int32x4_t y2, y3;
+                        y0 = vreinterpretq_s16_u16(vaddl_u8(x1, z));
+                        y1 = vreinterpretq_s16_u16(vaddl_u8(x0, x2));
+                        y2 = vmull_lane_s16(vget_low_s16(y0), k, 0);
+                        y2 = vmlal_lane_s16(y2, vget_low_s16(y1), k, 1);
+                        y3 = vmull_lane_s16(vget_high_s16(y0), k, 0);
+                        y3 = vmlal_lane_s16(y3, vget_high_s16(y1), k, 1);
+
+                        vst1q_s32((int32_t *)(dst + i), y2);
+                        vst1q_s32((int32_t *)(dst + i + 4), y3);
+                    }
+                }
+            }
+            else if( _ksize == 5 )
+            {
+                if( kx[0] == -2 && kx[1] == 0 && kx[2] == 1 )
+                    return 0;
+                else
+                {
+                    int32x4_t k32 = vdupq_n_s32(0);
+                    k32 = vld1q_lane_s32(kx, k32, 0);
+                    k32 = vld1q_lane_s32(kx + 1, k32, 1);
+                    k32 = vld1q_lane_s32(kx + 2, k32, 2);
+
+                    int16x4_t k = vqmovn_s32(k32);
+
+                    uint8x8_t z = vdup_n_u8(0);
+
+                    for( ; i <= width - 8; i += 8, src += 8 )
+                    {
+                        uint8x8_t x0, x1, x2, x3, x4;
+                        x0 = vld1_u8( (uint8_t *) (src - cn) );
+                        x1 = vld1_u8( (uint8_t *) (src) );
+                        x2 = vld1_u8( (uint8_t *) (src + cn) );
+
+                        int16x8_t y0, y1;
+                        int32x4_t accl, acch;
+                        y0 = vreinterpretq_s16_u16(vaddl_u8(x1, z));
+                        y1 = vreinterpretq_s16_u16(vaddl_u8(x0, x2));
+                        accl = vmull_lane_s16(vget_low_s16(y0), k, 0);
+                        accl = vmlal_lane_s16(accl, vget_low_s16(y1), k, 1);
+                        acch = vmull_lane_s16(vget_high_s16(y0), k, 0);
+                        acch = vmlal_lane_s16(acch, vget_high_s16(y1), k, 1);
+
+                        int16x8_t y2;
+                        x3 = vld1_u8( (uint8_t *) (src - cn*2) );
+                        x4 = vld1_u8( (uint8_t *) (src + cn*2) );
+                        y2 = vreinterpretq_s16_u16(vaddl_u8(x3, x4));
+                        accl = vmlal_lane_s16(accl, vget_low_s16(y2), k, 2);
+                        acch = vmlal_lane_s16(acch, vget_high_s16(y2), k, 2);
+
+                        vst1q_s32((int32_t *)(dst + i), accl);
+                        vst1q_s32((int32_t *)(dst + i + 4), acch);
+                    }
+                }
+            }
+        }
+        else
+        {
+            if( _ksize == 3 )
+            {
+                if( kx[0] == 0 && kx[1] == 1 )
+                {
+                    uint8x8_t z = vdup_n_u8(0);
+
+                    for( ; i <= width - 8; i += 8, src += 8 )
+                    {
+                        uint8x8_t x0, x1;
+                        x0 = vld1_u8( (uint8_t *) (src - cn) );
+                        x1 = vld1_u8( (uint8_t *) (src + cn) );
+
+                        int16x8_t y0;
+                        y0 = vsubq_s16(vreinterpretq_s16_u16(vaddl_u8(x1, z)),
+                                vreinterpretq_s16_u16(vaddl_u8(x0, z)));
+
+                        vst1q_s32((int32_t *)(dst + i), vmovl_s16(vget_low_s16(y0)));
+                        vst1q_s32((int32_t *)(dst + i + 4), vmovl_s16(vget_high_s16(y0)));
+                    }
+                }
+                else
+                {
+                    int32x4_t k32 = vdupq_n_s32(0);
+                    k32 = vld1q_lane_s32(kx + 1, k32, 1);
+
+                    int16x4_t k = vqmovn_s32(k32);
+
+                    uint8x8_t z = vdup_n_u8(0);
+
+                    for( ; i <= width - 8; i += 8, src += 8 )
+                    {
+                        uint8x8_t x0, x1;
+                        x0 = vld1_u8( (uint8_t *) (src - cn) );
+                        x1 = vld1_u8( (uint8_t *) (src + cn) );
+
+                        int16x8_t y0;
+                        int32x4_t y1, y2;
+                        y0 = vsubq_s16(vreinterpretq_s16_u16(vaddl_u8(x1, z)),
+                            vreinterpretq_s16_u16(vaddl_u8(x0, z)));
+                        y1 = vmull_lane_s16(vget_low_s16(y0), k, 1);
+                        y2 = vmull_lane_s16(vget_high_s16(y0), k, 1);
+
+                        vst1q_s32((int32_t *)(dst + i), y1);
+                        vst1q_s32((int32_t *)(dst + i + 4), y2);
+                    }
+                }
+            }
+            else if( _ksize == 5 )
+            {
+                int32x4_t k32 = vdupq_n_s32(0);
+                k32 = vld1q_lane_s32(kx + 1, k32, 1);
+                k32 = vld1q_lane_s32(kx + 2, k32, 2);
+
+                int16x4_t k = vqmovn_s32(k32);
+
+                uint8x8_t z = vdup_n_u8(0);
+
+                for( ; i <= width - 8; i += 8, src += 8 )
+                {
+                    uint8x8_t x0, x1;
+                    x0 = vld1_u8( (uint8_t *) (src - cn) );
+                    x1 = vld1_u8( (uint8_t *) (src + cn) );
+
+                    int32x4_t accl, acch;
+                    int16x8_t y0;
+                    y0 = vsubq_s16(vreinterpretq_s16_u16(vaddl_u8(x1, z)),
+                        vreinterpretq_s16_u16(vaddl_u8(x0, z)));
+                    accl = vmull_lane_s16(vget_low_s16(y0), k, 1);
+                    acch = vmull_lane_s16(vget_high_s16(y0), k, 1);
+
+                    uint8x8_t x2, x3;
+                    x2 = vld1_u8( (uint8_t *) (src - cn*2) );
+                    x3 = vld1_u8( (uint8_t *) (src + cn*2) );
+
+                    int16x8_t y1;
+                    y1 = vsubq_s16(vreinterpretq_s16_u16(vaddl_u8(x3, z)),
+                        vreinterpretq_s16_u16(vaddl_u8(x2, z)));
+                    accl = vmlal_lane_s16(accl, vget_low_s16(y1), k, 2);
+                    acch = vmlal_lane_s16(acch, vget_high_s16(y1), k, 2);
+
+                    vst1q_s32((int32_t *)(dst + i), accl);
+                    vst1q_s32((int32_t *)(dst + i + 4), acch);
+                }
+            }
+        }
+
+        return i;
+    }
+
+    Mat kernel;
+    int symmetryType;
+    bool smallValues;
+};
+
+
+struct SymmColumnVec_32s8u
+{
+    SymmColumnVec_32s8u() { symmetryType=0; }
+    SymmColumnVec_32s8u(const Mat& _kernel, int _symmetryType, int _bits, double _delta)
+    {
+        symmetryType = _symmetryType;
+        _kernel.convertTo(kernel, CV_32F, 1./(1 << _bits), 0);
+        delta = (float)(_delta/(1 << _bits));
+        CV_Assert( (symmetryType & (KERNEL_SYMMETRICAL | KERNEL_ASYMMETRICAL)) != 0 );
+    }
+
+    int operator()(const uchar** _src, uchar* dst, int width) const
+    {
+         if( !checkHardwareSupport(CV_CPU_NEON) )
+             return 0;
+
+        int _ksize = kernel.rows + kernel.cols - 1;
+        int ksize2 = _ksize / 2;
+        const float* ky = kernel.ptr<float>() + ksize2;
+        int i = 0, k;
+        bool symmetrical = (symmetryType & KERNEL_SYMMETRICAL) != 0;
+        const int** src = (const int**)_src;
+        const int *S, *S2;
+
+        float32x4_t d4 = vdupq_n_f32(delta);
+
+        if( symmetrical )
+        {
+            if( _ksize == 1 )
+                return 0;
+
+
+            float32x2_t k32;
+            k32 = vdup_n_f32(0);
+            k32 = vld1_lane_f32(ky, k32, 0);
+            k32 = vld1_lane_f32(ky + 1, k32, 1);
+
+            for( ; i <= width - 8; i += 8 )
+            {
+                float32x4_t accl, acch;
+                float32x4_t f0l, f0h, f1l, f1h, f2l, f2h;
+
+                S = src[0] + i;
+
+                f0l = vcvtq_f32_s32( vld1q_s32(S) );
+                f0h = vcvtq_f32_s32( vld1q_s32(S + 4) );
+
+                S = src[1] + i;
+                S2 = src[-1] + i;
+
+                f1l = vcvtq_f32_s32( vld1q_s32(S) );
+                f1h = vcvtq_f32_s32( vld1q_s32(S + 4) );
+                f2l = vcvtq_f32_s32( vld1q_s32(S2) );
+                f2h = vcvtq_f32_s32( vld1q_s32(S2 + 4) );
+
+                accl = acch = d4;
+                accl = vmlaq_lane_f32(accl, f0l, k32, 0);
+                acch = vmlaq_lane_f32(acch, f0h, k32, 0);
+                accl = vmlaq_lane_f32(accl, vaddq_f32(f1l, f2l), k32, 1);
+                acch = vmlaq_lane_f32(acch, vaddq_f32(f1h, f2h), k32, 1);
+
+                for( k = 2; k <= ksize2; k++ )
+                {
+                    S = src[k] + i;
+                    S2 = src[-k] + i;
+
+                    float32x4_t f3l, f3h, f4l, f4h;
+                    f3l = vcvtq_f32_s32( vld1q_s32(S) );
+                    f3h = vcvtq_f32_s32( vld1q_s32(S + 4) );
+                    f4l = vcvtq_f32_s32( vld1q_s32(S2) );
+                    f4h = vcvtq_f32_s32( vld1q_s32(S2 + 4) );
+
+                    accl = vmlaq_n_f32(accl, vaddq_f32(f3l, f4l), ky[k]);
+                    acch = vmlaq_n_f32(acch, vaddq_f32(f3h, f4h), ky[k]);
+                }
+
+                int32x4_t s32l, s32h;
+                s32l = vcvtq_s32_f32(accl);
+                s32h = vcvtq_s32_f32(acch);
+
+                int16x4_t s16l, s16h;
+                s16l = vqmovn_s32(s32l);
+                s16h = vqmovn_s32(s32h);
+
+                uint8x8_t u8;
+                u8 =  vqmovun_s16(vcombine_s16(s16l, s16h));
+
+                vst1_u8((uint8_t *)(dst + i), u8);
+            }
+        }
+        else
+        {
+            float32x2_t k32;
+            k32 = vdup_n_f32(0);
+            k32 = vld1_lane_f32(ky + 1, k32, 1);
+
+            for( ; i <= width - 8; i += 8 )
+            {
+                float32x4_t accl, acch;
+                float32x4_t f1l, f1h, f2l, f2h;
+
+                S = src[1] + i;
+                S2 = src[-1] + i;
+
+                f1l = vcvtq_f32_s32( vld1q_s32(S) );
+                f1h = vcvtq_f32_s32( vld1q_s32(S + 4) );
+                f2l = vcvtq_f32_s32( vld1q_s32(S2) );
+                f2h = vcvtq_f32_s32( vld1q_s32(S2 + 4) );
+
+                accl = acch = d4;
+                accl = vmlaq_lane_f32(accl, vsubq_f32(f1l, f2l), k32, 1);
+                acch = vmlaq_lane_f32(acch, vsubq_f32(f1h, f2h), k32, 1);
+
+                for( k = 2; k <= ksize2; k++ )
+                {
+                    S = src[k] + i;
+                    S2 = src[-k] + i;
+
+                    float32x4_t f3l, f3h, f4l, f4h;
+                    f3l = vcvtq_f32_s32( vld1q_s32(S) );
+                    f3h = vcvtq_f32_s32( vld1q_s32(S + 4) );
+                    f4l = vcvtq_f32_s32( vld1q_s32(S2) );
+                    f4h = vcvtq_f32_s32( vld1q_s32(S2 + 4) );
+
+                    accl = vmlaq_n_f32(accl, vsubq_f32(f3l, f4l), ky[k]);
+                    acch = vmlaq_n_f32(acch, vsubq_f32(f3h, f4h), ky[k]);
+                }
+
+                int32x4_t s32l, s32h;
+                s32l = vcvtq_s32_f32(accl);
+                s32h = vcvtq_s32_f32(acch);
+
+                int16x4_t s16l, s16h;
+                s16l = vqmovn_s32(s32l);
+                s16h = vqmovn_s32(s32h);
+
+                uint8x8_t u8;
+                u8 =  vqmovun_s16(vcombine_s16(s16l, s16h));
+
+                vst1_u8((uint8_t *)(dst + i), u8);
+            }
+        }
+
+        return i;
+    }
+
+    int symmetryType;
+    float delta;
+    Mat kernel;
+};
+
+
+struct SymmColumnSmallVec_32s16s
+{
+    SymmColumnSmallVec_32s16s() { symmetryType=0; }
+    SymmColumnSmallVec_32s16s(const Mat& _kernel, int _symmetryType, int _bits, double _delta)
+    {
+        symmetryType = _symmetryType;
+        _kernel.convertTo(kernel, CV_32F, 1./(1 << _bits), 0);
+        delta = (float)(_delta/(1 << _bits));
+        CV_Assert( (symmetryType & (KERNEL_SYMMETRICAL | KERNEL_ASYMMETRICAL)) != 0 );
+    }
+
+    int operator()(const uchar** _src, uchar* _dst, int width) const
+    {
+         if( !checkHardwareSupport(CV_CPU_NEON) )
+             return 0;
+
+        int ksize2 = (kernel.rows + kernel.cols - 1)/2;
+        const float* ky = kernel.ptr<float>() + ksize2;
+        int i = 0;
+        bool symmetrical = (symmetryType & KERNEL_SYMMETRICAL) != 0;
+        const int** src = (const int**)_src;
+        const int *S0 = src[-1], *S1 = src[0], *S2 = src[1];
+        short* dst = (short*)_dst;
+        float32x4_t df4 = vdupq_n_f32(delta);
+        int32x4_t d4 = vcvtq_s32_f32(df4);
+
+        if( symmetrical )
+        {
+            if( ky[0] == 2 && ky[1] == 1 )
+            {
+                for( ; i <= width - 4; i += 4 )
+                {
+                    int32x4_t x0, x1, x2;
+                    x0 = vld1q_s32((int32_t const *)(S0 + i));
+                    x1 = vld1q_s32((int32_t const *)(S1 + i));
+                    x2 = vld1q_s32((int32_t const *)(S2 + i));
+
+                    int32x4_t y0, y1, y2, y3;
+                    y0 = vaddq_s32(x0, x2);
+                    y1 = vqshlq_n_s32(x1, 1);
+                    y2 = vaddq_s32(y0, y1);
+                    y3 = vaddq_s32(y2, d4);
+
+                    int16x4_t t;
+                    t = vqmovn_s32(y3);
+
+                    vst1_s16((int16_t *)(dst + i), t);
+                }
+            }
+            else if( ky[0] == -2 && ky[1] == 1 )
+            {
+                for( ; i <= width - 4; i += 4 )
+                {
+                    int32x4_t x0, x1, x2;
+                    x0 = vld1q_s32((int32_t const *)(S0 + i));
+                    x1 = vld1q_s32((int32_t const *)(S1 + i));
+                    x2 = vld1q_s32((int32_t const *)(S2 + i));
+
+                    int32x4_t y0, y1, y2, y3;
+                    y0 = vaddq_s32(x0, x2);
+                    y1 = vqshlq_n_s32(x1, 1);
+                    y2 = vsubq_s32(y0, y1);
+                    y3 = vaddq_s32(y2, d4);
+
+                    int16x4_t t;
+                    t = vqmovn_s32(y3);
+
+                    vst1_s16((int16_t *)(dst + i), t);
+                }
+            }
+            else if( ky[0] == 10 && ky[1] == 3 )
+            {
+                for( ; i <= width - 4; i += 4 )
+                {
+                    int32x4_t x0, x1, x2, x3;
+                    x0 = vld1q_s32((int32_t const *)(S0 + i));
+                    x1 = vld1q_s32((int32_t const *)(S1 + i));
+                    x2 = vld1q_s32((int32_t const *)(S2 + i));
+
+                    x3 = vaddq_s32(x0, x2);
+
+                    int32x4_t y0;
+                    y0 = vmlaq_n_s32(d4, x1, 10);
+                    y0 = vmlaq_n_s32(y0, x3, 3);
+
+                    int16x4_t t;
+                    t = vqmovn_s32(y0);
+
+                    vst1_s16((int16_t *)(dst + i), t);
+                }
+            }
+            else
+            {
+                float32x2_t k32 = vdup_n_f32(0);
+                k32 = vld1_lane_f32(ky, k32, 0);
+                k32 = vld1_lane_f32(ky + 1, k32, 1);
+
+                for( ; i <= width - 4; i += 4 )
+                {
+                    int32x4_t x0, x1, x2, x3, x4;
+                    x0 = vld1q_s32((int32_t const *)(S0 + i));
+                    x1 = vld1q_s32((int32_t const *)(S1 + i));
+                    x2 = vld1q_s32((int32_t const *)(S2 + i));
+
+                    x3 = vaddq_s32(x0, x2);
+
+                    float32x4_t s0, s1, s2;
+                    s0 = vcvtq_f32_s32(x1);
+                    s1 = vcvtq_f32_s32(x3);
+                    s2 = vmlaq_lane_f32(df4, s0, k32, 0);
+                    s2 = vmlaq_lane_f32(s2, s1, k32, 1);
+
+                    x4 = vcvtq_s32_f32(s2);
+
+                    int16x4_t x5;
+                    x5 = vqmovn_s32(x4);
+
+                    vst1_s16((int16_t *)(dst + i), x5);
+                }
+            }
+        }
+        else
+        {
+            if( fabs(ky[1]) == 1 && ky[1] == -ky[-1] )
+            {
+                if( ky[1] < 0 )
+                    std::swap(S0, S2);
+                for( ; i <= width - 4; i += 4 )
+                {
+                    int32x4_t x0, x1;
+                    x0 = vld1q_s32((int32_t const *)(S0 + i));
+                    x1 = vld1q_s32((int32_t const *)(S2 + i));
+
+                    int32x4_t y0, y1;
+                    y0 = vsubq_s32(x1, x0);
+                    y1 = vqaddq_s32(y0, d4);
+
+                    int16x4_t t;
+                    t = vqmovn_s32(y1);
+
+                    vst1_s16((int16_t *)(dst + i), t);
+                }
+            }
+            else
+            {
+                float32x2_t k32 = vdup_n_f32(0);
+                k32 = vld1_lane_f32(ky + 1, k32, 1);
+
+                for( ; i <= width - 4; i += 4 )
+                {
+                    int32x4_t x0, x1, x2, x3;
+                    x0 = vld1q_s32((int32_t const *)(S0 + i));
+                    x1 = vld1q_s32((int32_t const *)(S2 + i));
+
+                    x2 = vsubq_s32(x1, x0);
+
+                    float32x4_t s0, s1;
+                    s0 = vcvtq_f32_s32(x2);
+                    s1 = vmlaq_lane_f32(df4, s0, k32, 1);
+
+                    x3 = vcvtq_s32_f32(s1);
+
+                    int16x4_t x4;
+                    x4 = vqmovn_s32(x3);
+
+                    vst1_s16((int16_t *)(dst + i), x4);
+                }
+            }
+        }
+
+        return i;
+    }
+
+    int symmetryType;
+    float delta;
+    Mat kernel;
+};
+
+
+struct SymmColumnVec_32f16s
+{
+    SymmColumnVec_32f16s() { symmetryType=0; }
+    SymmColumnVec_32f16s(const Mat& _kernel, int _symmetryType, int, double _delta)
+    {
+        symmetryType = _symmetryType;
+        kernel = _kernel;
+        delta = (float)_delta;
+        CV_Assert( (symmetryType & (KERNEL_SYMMETRICAL | KERNEL_ASYMMETRICAL)) != 0 );
+         neon_supported = checkHardwareSupport(CV_CPU_NEON);
+    }
+
+    int operator()(const uchar** _src, uchar* _dst, int width) const
+    {
+         if( !neon_supported )
+             return 0;
+
+        int _ksize = kernel.rows + kernel.cols - 1;
+        int ksize2 = _ksize / 2;
+        const float* ky = kernel.ptr<float>() + ksize2;
+        int i = 0, k;
+        bool symmetrical = (symmetryType & KERNEL_SYMMETRICAL) != 0;
+        const float** src = (const float**)_src;
+        const float *S, *S2;
+        short* dst = (short*)_dst;
+
+        float32x4_t d4 = vdupq_n_f32(delta);
+
+        if( symmetrical )
+        {
+            if( _ksize == 1 )
+                return 0;
+
+
+            float32x2_t k32;
+            k32 = vdup_n_f32(0);
+            k32 = vld1_lane_f32(ky, k32, 0);
+            k32 = vld1_lane_f32(ky + 1, k32, 1);
+
+            for( ; i <= width - 8; i += 8 )
+            {
+                float32x4_t x0l, x0h, x1l, x1h, x2l, x2h;
+                float32x4_t accl, acch;
+
+                S = src[0] + i;
+
+                x0l = vld1q_f32(S);
+                x0h = vld1q_f32(S + 4);
+
+                S = src[1] + i;
+                S2 = src[-1] + i;
+
+                x1l = vld1q_f32(S);
+                x1h = vld1q_f32(S + 4);
+                x2l = vld1q_f32(S2);
+                x2h = vld1q_f32(S2 + 4);
+
+                accl = acch = d4;
+                accl = vmlaq_lane_f32(accl, x0l, k32, 0);
+                acch = vmlaq_lane_f32(acch, x0h, k32, 0);
+                accl = vmlaq_lane_f32(accl, vaddq_f32(x1l, x2l), k32, 1);
+                acch = vmlaq_lane_f32(acch, vaddq_f32(x1h, x2h), k32, 1);
+
+                for( k = 2; k <= ksize2; k++ )
+                {
+                    S = src[k] + i;
+                    S2 = src[-k] + i;
+
+                    float32x4_t x3l, x3h, x4l, x4h;
+                    x3l = vld1q_f32(S);
+                    x3h = vld1q_f32(S + 4);
+                    x4l = vld1q_f32(S2);
+                    x4h = vld1q_f32(S2 + 4);
+
+                    accl = vmlaq_n_f32(accl, vaddq_f32(x3l, x4l), ky[k]);
+                    acch = vmlaq_n_f32(acch, vaddq_f32(x3h, x4h), ky[k]);
+                }
+
+                int32x4_t s32l, s32h;
+                s32l = vcvtq_s32_f32(accl);
+                s32h = vcvtq_s32_f32(acch);
+
+                int16x4_t s16l, s16h;
+                s16l = vqmovn_s32(s32l);
+                s16h = vqmovn_s32(s32h);
+
+                vst1_s16((int16_t *)(dst + i), s16l);
+                vst1_s16((int16_t *)(dst + i + 4), s16h);
+            }
+        }
+        else
+        {
+            float32x2_t k32;
+            k32 = vdup_n_f32(0);
+            k32 = vld1_lane_f32(ky + 1, k32, 1);
+
+            for( ; i <= width - 8; i += 8 )
+            {
+                float32x4_t x1l, x1h, x2l, x2h;
+                float32x4_t accl, acch;
+
+                S = src[1] + i;
+                S2 = src[-1] + i;
+
+                x1l = vld1q_f32(S);
+                x1h = vld1q_f32(S + 4);
+                x2l = vld1q_f32(S2);
+                x2h = vld1q_f32(S2 + 4);
+
+                accl = acch = d4;
+                accl = vmlaq_lane_f32(accl, vsubq_f32(x1l, x2l), k32, 1);
+                acch = vmlaq_lane_f32(acch, vsubq_f32(x1h, x2h), k32, 1);
+
+                for( k = 2; k <= ksize2; k++ )
+                {
+                    S = src[k] + i;
+                    S2 = src[-k] + i;
+
+                    float32x4_t x3l, x3h, x4l, x4h;
+                    x3l = vld1q_f32(S);
+                    x3h = vld1q_f32(S + 4);
+                    x4l = vld1q_f32(S2);
+                    x4h = vld1q_f32(S2 + 4);
+
+                    accl = vmlaq_n_f32(accl, vsubq_f32(x3l, x4l), ky[k]);
+                    acch = vmlaq_n_f32(acch, vsubq_f32(x3h, x4h), ky[k]);
+                }
+
+                int32x4_t s32l, s32h;
+                s32l = vcvtq_s32_f32(accl);
+                s32h = vcvtq_s32_f32(acch);
+
+                int16x4_t s16l, s16h;
+                s16l = vqmovn_s32(s32l);
+                s16h = vqmovn_s32(s32h);
+
+                vst1_s16((int16_t *)(dst + i), s16l);
+                vst1_s16((int16_t *)(dst + i + 4), s16h);
+            }
+        }
+
+        return i;
+    }
+
+    int symmetryType;
+    float delta;
+    Mat kernel;
+    bool neon_supported;
+};
+
+
+struct SymmRowSmallVec_32f
+{
+    SymmRowSmallVec_32f() {}
+    SymmRowSmallVec_32f( const Mat& _kernel, int _symmetryType )
+    {
+        kernel = _kernel;
+        symmetryType = _symmetryType;
+    }
+
+    int operator()(const uchar* _src, uchar* _dst, int width, int cn) const
+    {
+         if( !checkHardwareSupport(CV_CPU_NEON) )
+             return 0;
+
+        int i = 0, _ksize = kernel.rows + kernel.cols - 1;
+        float* dst = (float*)_dst;
+        const float* src = (const float*)_src + (_ksize/2)*cn;
+        bool symmetrical = (symmetryType & KERNEL_SYMMETRICAL) != 0;
+        const float* kx = kernel.ptr<float>() + _ksize/2;
+        width *= cn;
+
+        if( symmetrical )
+        {
+            if( _ksize == 1 )
+                return 0;
+            if( _ksize == 3 )
+            {
+                if( kx[0] == 2 && kx[1] == 1 )
+                    return 0;
+                else if( kx[0] == -2 && kx[1] == 1 )
+                    return 0;
+                else
+                {
+                    return 0;
+                }
+            }
+            else if( _ksize == 5 )
+            {
+                if( kx[0] == -2 && kx[1] == 0 && kx[2] == 1 )
+                    return 0;
+                else
+                {
+                    float32x2_t k0, k1;
+                    k0 = k1 = vdup_n_f32(0);
+                    k0 = vld1_lane_f32(kx + 0, k0, 0);
+                    k0 = vld1_lane_f32(kx + 1, k0, 1);
+                    k1 = vld1_lane_f32(kx + 2, k1, 0);
+
+                    for( ; i <= width - 4; i += 4, src += 4 )
+                    {
+                        float32x4_t x0, x1, x2, x3, x4;
+                        x0 = vld1q_f32(src);
+                        x1 = vld1q_f32(src - cn);
+                        x2 = vld1q_f32(src + cn);
+                        x3 = vld1q_f32(src - cn*2);
+                        x4 = vld1q_f32(src + cn*2);
+
+                        float32x4_t y0;
+                        y0 = vmulq_lane_f32(x0, k0, 0);
+                        y0 = vmlaq_lane_f32(y0, vaddq_f32(x1, x2), k0, 1);
+                        y0 = vmlaq_lane_f32(y0, vaddq_f32(x3, x4), k1, 0);
+
+                        vst1q_f32(dst + i, y0);
+                    }
+                }
+            }
+        }
+        else
+        {
+            if( _ksize == 3 )
+            {
+                if( kx[0] == 0 && kx[1] == 1 )
+                    return 0;
+                else
+                {
+                    return 0;
+                }
+            }
+            else if( _ksize == 5 )
+            {
+                float32x2_t k;
+                k = vdup_n_f32(0);
+                k = vld1_lane_f32(kx + 1, k, 0);
+                k = vld1_lane_f32(kx + 2, k, 1);
+
+                for( ; i <= width - 4; i += 4, src += 4 )
+                {
+                    float32x4_t x0, x1, x2, x3;
+                    x0 = vld1q_f32(src - cn);
+                    x1 = vld1q_f32(src + cn);
+                    x2 = vld1q_f32(src - cn*2);
+                    x3 = vld1q_f32(src + cn*2);
+
+                    float32x4_t y0;
+                    y0 = vmulq_lane_f32(vsubq_f32(x1, x0), k, 0);
+                    y0 = vmlaq_lane_f32(y0, vsubq_f32(x3, x2), k, 1);
+
+                    vst1q_f32(dst + i, y0);
+                }
+            }
+        }
+
+        return i;
+    }
+
+    Mat kernel;
+    int symmetryType;
+};
+
+
+typedef RowNoVec RowVec_8u32s;
+typedef RowNoVec RowVec_16s32f;
+typedef RowNoVec RowVec_32f;
+typedef ColumnNoVec SymmColumnVec_32f;
+typedef SymmColumnSmallNoVec SymmColumnSmallVec_32f;
+typedef FilterNoVec FilterVec_8u;
+typedef FilterNoVec FilterVec_8u16s;
+typedef FilterNoVec FilterVec_32f;
+
+
 #else
 
 typedef RowNoVec RowVec_8u32s;
@@ -2615,7 +3398,7 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
         bool symmetrical = (this->symmetryType & KERNEL_SYMMETRICAL) != 0;
         bool is_1_2_1 = ky[0] == 2 && ky[1] == 1;
         bool is_1_m2_1 = ky[0] == -2 && ky[1] == 1;
-        bool is_m1_0_1 = ky[1] == 1 || ky[1] == -1;
+        bool is_m1_0_1 = ky[0] == 0 && (ky[1] == 1 || ky[1] == -1);
         ST f0 = ky[0], f1 = ky[1];
         ST _delta = this->delta;
         CastOp castOp = this->castOp0;
@@ -2646,13 +3429,12 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
                         D[i+2] = castOp(s0);
                         D[i+3] = castOp(s1);
                     }
-                    #else
+                    #endif
                     for( ; i < width; i ++ )
                     {
                         ST s0 = S0[i] + S1[i]*2 + S2[i] + _delta;
                         D[i] = castOp(s0);
                     }
-                    #endif
                 }
                 else if( is_1_m2_1 )
                 {
@@ -2669,17 +3451,16 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
                         D[i+2] = castOp(s0);
                         D[i+3] = castOp(s1);
                     }
-                    #else
+                    #endif
                     for( ; i < width; i ++ )
                     {
                         ST s0 = S0[i] - S1[i]*2 + S2[i] + _delta;
                         D[i] = castOp(s0);
                     }
-                    #endif
                 }
                 else
                 {
-                   #if CV_ENABLE_UNROLLED
+                    #if CV_ENABLE_UNROLLED
                     for( ; i <= width - 4; i += 4 )
                     {
                         ST s0 = (S0[i] + S2[i])*f1 + S1[i]*f0 + _delta;
@@ -2692,16 +3473,13 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
                         D[i+2] = castOp(s0);
                         D[i+3] = castOp(s1);
                     }
-                    #else
+                    #endif
                     for( ; i < width; i ++ )
                     {
                         ST s0 = (S0[i] + S2[i])*f1 + S1[i]*f0 + _delta;
                         D[i] = castOp(s0);
                     }
-                    #endif
                 }
-                for( ; i < width; i++ )
-                    D[i] = castOp((S0[i] + S2[i])*f1 + S1[i]*f0 + _delta);
             }
             else
             {
@@ -2709,7 +3487,7 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
                 {
                     if( f1 < 0 )
                         std::swap(S0, S2);
-                   #if CV_ENABLE_UNROLLED
+                    #if CV_ENABLE_UNROLLED
                     for( ; i <= width - 4; i += 4 )
                     {
                         ST s0 = S2[i] - S0[i] + _delta;
@@ -2722,19 +3500,18 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
                         D[i+2] = castOp(s0);
                         D[i+3] = castOp(s1);
                     }
-                    #else
+                    #endif
                     for( ; i < width; i ++ )
                     {
                         ST s0 = S2[i] - S0[i] + _delta;
                         D[i] = castOp(s0);
                     }
-                    #endif
                     if( f1 < 0 )
                         std::swap(S0, S2);
                 }
                 else
                 {
-                   #if CV_ENABLE_UNROLLED
+                    #if CV_ENABLE_UNROLLED
                     for( ; i <= width - 4; i += 4 )
                     {
                         ST s0 = (S2[i] - S0[i])*f1 + _delta;
@@ -2748,10 +3525,9 @@ struct SymmColumnSmallFilter : public SymmColumnFilter<CastOp, VecOp>
                         D[i+3] = castOp(s1);
                     }
                     #endif
+                    for( ; i < width; i++ )
+                        D[i] = castOp((S2[i] - S0[i])*f1 + _delta);
                 }
-
-                for( ; i < width; i++ )
-                    D[i] = castOp((S2[i] - S0[i])*f1 + _delta);
             }
         }
     }
@@ -3198,7 +3974,7 @@ static bool ocl_filter2D( InputArray _src, OutputArray _dst, int ddepth,
 
     cv::Mat kernelMat = _kernel.getMat();
     cv::Size sz = _src.size(), wholeSize;
-    size_t globalsize[2] = { sz.width, sz.height };
+    size_t globalsize[2] = { (size_t)sz.width, (size_t)sz.height };
     size_t localsize_general[2] = {0, 1};
     size_t* localsize = NULL;
 
@@ -3723,6 +4499,495 @@ cv::Ptr<cv::FilterEngine> cv::createLinearFilter( int _srcType, int _dstType,
 }
 
 
+//================================================================
+// HAL interface
+//================================================================
+
+using namespace cv;
+
+struct ReplacementFilter : public hal::Filter2D
+{
+    cvhalFilter2D* ctx;
+    bool isInitialized;
+    ReplacementFilter() : ctx(0), isInitialized(false) { }
+    bool init(uchar* kernel_data, size_t kernel_step, int kernel_type, int kernel_width,
+              int kernel_height, int max_width, int max_height, int stype, int dtype, int borderType, double delta,
+              int anchor_x, int anchor_y, bool isSubmatrix, bool isInplace)
+    {
+        int res = cv_hal_filterInit(&ctx, kernel_data, kernel_step, kernel_type, kernel_width, kernel_height, max_width, max_height,
+                                    stype, dtype, borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace);
+        isInitialized = (res == CV_HAL_ERROR_OK);
+        return isInitialized;
+    }
+    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int full_width, int full_height, int offset_x, int offset_y)
+    {
+        if (isInitialized)
+        {
+            int res = cv_hal_filter(ctx, src_data, src_step, dst_data, dst_step, width, height, full_width, full_height, offset_x, offset_y);
+            if (res != CV_HAL_ERROR_OK)
+                CV_Error(Error::StsNotImplemented, "HAL Filter returned an error");
+        }
+    }
+    ~ReplacementFilter()
+    {
+        if (isInitialized)
+        {
+            int res = cv_hal_filterFree(ctx);
+            if (res != CV_HAL_ERROR_OK)
+                CV_Error(Error::StsNotImplemented, "HAL Filter Free returned an error");
+        }
+    }
+};
+
+#ifdef HAVE_IPP
+#if !HAVE_ICV
+typedef IppStatus(CV_STDCALL* ippiFilterBorder)(
+    const void* pSrc, int srcStep, void* pDst, int dstStep,
+    IppiSize dstRoiSize, IppiBorderType border, const void* borderValue,
+    const IppiFilterBorderSpec* pSpec, Ipp8u* pBuffer);
+
+static ippiFilterBorder getIppFunc(int stype)
+{
+    switch (stype)
+    {
+    case CV_8UC1:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_8u_C1R);
+    case CV_8UC3:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_8u_C3R);
+    case CV_8UC4:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_8u_C4R);
+    case CV_16UC1:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_16u_C1R);
+    case CV_16UC3:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_16u_C3R);
+    case CV_16UC4:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_16u_C4R);
+    case CV_16SC1:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_16s_C1R);
+    case CV_16SC3:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_16s_C3R);
+    case CV_16SC4:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_16s_C4R);
+    case CV_32FC1:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_32f_C1R);
+    case CV_32FC3:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_32f_C3R);
+    case CV_32FC4:
+        return reinterpret_cast<ippiFilterBorder>(ippiFilterBorder_32f_C4R);
+    default:
+        return 0;
+    }
+}
+
+template <int kdepth>
+struct IppFilterTrait { };
+
+template <>
+struct IppFilterTrait<CV_16S>
+{
+    enum { kernel_type_id = CV_16SC1 };
+    typedef Ipp16s kernel_type;
+    typedef IppStatus(CV_STDCALL* copy_fun_type)(const kernel_type* pSrc, int srcStep, kernel_type* pDst, int dstStep, IppiSize roiSize);
+    inline static copy_fun_type get_copy_fun() { return ippiCopy_16s_C1R; }
+    inline static IppStatus runInit(const kernel_type* pKernel, IppiSize kernelSize, int divisor, IppDataType dataType, int numChannels, IppRoundMode roundMode, IppiFilterBorderSpec* pSpec)
+    {
+        return ippiFilterBorderInit_16s(pKernel, kernelSize, divisor, dataType, numChannels, roundMode, pSpec);
+    }
+};
+
+template <>
+struct IppFilterTrait<CV_32F>
+{
+    enum { kernel_type_id = CV_32FC1 };
+    typedef Ipp32f kernel_type;
+    typedef IppStatus(CV_STDCALL* copy_fun_type)(const kernel_type* pSrc, int srcStep, kernel_type* pDst, int dstStep, IppiSize roiSize);
+    inline static copy_fun_type get_copy_fun() { return ippiCopy_32f_C1R; }
+    inline static IppStatus runInit(const kernel_type* pKernel, IppiSize kernelSize, int divisor, IppDataType dataType, int numChannels, IppRoundMode roundMode, IppiFilterBorderSpec* pSpec)
+    {
+        CV_UNUSED(divisor);
+        return ippiFilterBorderInit_32f(pKernel, kernelSize, dataType, numChannels, roundMode, pSpec);
+    }
+};
+
+template <int kdepth>
+struct IppFilter : public hal::Filter2D
+{
+    typedef IppFilterTrait<kdepth> trait;
+    typedef typename trait::kernel_type kernel_type;
+
+    IppAutoBuffer<IppiFilterBorderSpec> spec;
+    IppAutoBuffer<Ipp8u> buffer;
+    IppAutoBuffer<kernel_type> kernelBuffer;
+    IppiBorderType ippBorderType;
+    int src_type;
+
+    bool init(uchar* kernel_data, size_t kernel_step, int, int kernel_width, int kernel_height,
+              int max_width, int max_height, int stype, int dtype,
+              int borderType, double delta, int anchor_x, int anchor_y, bool isSubmatrix, bool isInplace)
+    {
+        Point anchor(anchor_x, anchor_y);
+#if IPP_VERSION_X100 >= 900
+        Point ippAnchor((kernel_width - 1) / 2, (kernel_height - 1) / 2);
+#else
+        Point ippAnchor(kernel_width >> 1, kernel_height >> 1);
+#endif
+        bool isIsolated = (borderType & BORDER_ISOLATED) != 0;
+        int borderTypeNI = borderType & ~BORDER_ISOLATED;
+        ippBorderType = ippiGetBorderType(borderTypeNI);
+        int ddepth = CV_MAT_DEPTH(dtype);
+        int sdepth = CV_MAT_DEPTH(stype);
+
+        bool runIpp = true
+                      && (borderTypeNI == BORDER_CONSTANT || borderTypeNI == BORDER_REPLICATE)
+                      && (sdepth == ddepth)
+                      && (getIppFunc(stype))
+                      && ((int)ippBorderType > 0)
+                      && (!isSubmatrix || isIsolated)
+                      && (std::fabs(delta - 0) < DBL_EPSILON)
+                      && (ippAnchor == anchor)
+                      && !isInplace;
+
+        if (!runIpp)
+            return false;
+
+        src_type = stype;
+        int cn = CV_MAT_CN(stype);
+        IppiSize kernelSize = { kernel_width, kernel_height };
+        IppDataType dataType = ippiGetDataType(ddepth);
+        IppDataType kernelType = ippiGetDataType(kdepth);
+        Ipp32s specSize = 0;
+        Ipp32s bufsize = 0;
+        IppiSize dstRoiSize = { max_width, max_height };
+        IppStatus status;
+        status = ippiFilterBorderGetSize(kernelSize, dstRoiSize, dataType, kernelType, cn, &specSize, &bufsize);
+        if (status >= 0) {
+            kernel_type* pKerBuffer = (kernel_type*)kernel_data;
+            size_t good_kernel_step = sizeof(kernel_type) * static_cast<size_t>(kernelSize.width);
+#if IPP_VERSION_X100 >= 900
+            if (kernel_step != good_kernel_step) {
+                kernelBuffer.Alloc((int)good_kernel_step * kernelSize.height);
+                status = trait::get_copy_fun()((kernel_type*)kernel_data, (int)kernel_step, kernelBuffer, (int)good_kernel_step, kernelSize);
+                if (status < 0)
+                    return false;
+                pKerBuffer = kernelBuffer;
+            }
+#else
+            kernelBuffer.Alloc(good_kernel_step * kernelSize.height);
+            Mat kerFlip(Size(kernelSize.width, kernelSize.height), trait::kernel_type_id, kernelBuffer, (int)good_kernel_step);
+            Mat kernel(Size(kernel_width, kernel_height), trait::kernel_type_id, kernel_data, kernel_step);
+            flip(kernel, kerFlip, -1);
+            pKerBuffer = kernelBuffer;
+#endif
+            spec.Alloc(specSize);
+            buffer.Alloc(bufsize);
+            status = trait::runInit(pKerBuffer, kernelSize, 0, dataType, cn, ippRndFinancial, spec);
+            if (status >= 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int, int, int, int)
+    {
+        if (dst_data == src_data)
+            CV_Error(Error::StsBadArg, "Inplace IPP Filter2D is not supported");
+        ippiFilterBorder ippFunc = getIppFunc(src_type);
+        IppiSize dstRoiSize = { width, height };
+        kernel_type borderValue[4] = { 0, 0, 0, 0 };
+        IppStatus status = ippFunc(src_data, (int)src_step, dst_data, (int)dst_step, dstRoiSize, ippBorderType, borderValue, spec, buffer);
+        if (status >= 0) {
+            CV_IMPL_ADD(CV_IMPL_IPP);
+        }
+    }
+};
+#endif
+#endif
+
+struct DftFilter : public hal::Filter2D
+{
+    int src_type;
+    int dst_type;
+    double delta;
+    Mat kernel;
+    Point anchor;
+    int borderType;
+
+    static bool isAppropriate(int stype, int dtype, int kernel_width, int kernel_height)
+    {
+#if CV_SSE2
+        int sdepth = CV_MAT_DEPTH(stype);
+        int ddepth = CV_MAT_DEPTH(dtype);
+        int dft_filter_size = ((sdepth == CV_8U && (ddepth == CV_8U || ddepth == CV_16S)) || (sdepth == CV_32F && ddepth == CV_32F)) && checkHardwareSupport(CV_CPU_SSE3) ? 130 : 50;
+#else
+        CV_UNUSED(stype);
+        CV_UNUSED(dtype);
+        int dft_filter_size = 50;
+#endif
+        return kernel_width * kernel_height >= dft_filter_size;
+    }
+
+    bool init(uchar* kernel_data, size_t kernel_step, int kernel_type, int kernel_width, int kernel_height,
+              int, int, int stype, int dtype,
+              int borderType_, double delta_, int anchor_x, int anchor_y, bool, bool)
+    {
+        anchor = Point(anchor_x, anchor_y);
+        borderType = borderType_;
+        kernel = Mat(Size(kernel_width, kernel_height), kernel_type, kernel_data, kernel_step);
+        src_type = stype;
+        dst_type = dtype;
+        delta = delta_;
+        if (isAppropriate(stype, dtype, kernel_width, kernel_height))
+            return true;
+        return false;
+    }
+
+    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int, int, int, int)
+    {
+        Mat src(Size(width, height), src_type, src_data, src_step);
+        Mat dst(Size(width, height), dst_type, dst_data, dst_step);
+        Mat temp;
+        int src_channels = CV_MAT_CN(src_type);
+        int dst_channels = CV_MAT_CN(dst_type);
+        int ddepth = CV_MAT_DEPTH(dst_type);
+        // crossCorr doesn't accept non-zero delta with multiple channels
+        if (src_channels != 1 && delta != 0) {
+            // The semantics of filter2D require that the delta be applied
+            // as floating-point math.  So wee need an intermediate Mat
+            // with a float datatype.  If the dest is already floats,
+            // we just use that.
+            int corrDepth = ddepth;
+            if ((ddepth == CV_32F || ddepth == CV_64F) && src_data != dst_data) {
+                temp = Mat(Size(width, height), dst_type, dst_data, dst_step);
+            } else {
+                corrDepth = ddepth == CV_64F ? CV_64F : CV_32F;
+                temp.create(Size(width, height), CV_MAKETYPE(corrDepth, dst_channels));
+            }
+            crossCorr(src, kernel, temp, src.size(),
+                      CV_MAKETYPE(corrDepth, src_channels),
+                      anchor, 0, borderType);
+            add(temp, delta, temp);
+            if (temp.data != dst_data) {
+                temp.convertTo(dst, dst.type());
+            }
+        } else {
+            if (src_data != dst_data)
+                temp = Mat(Size(width, height), dst_type, dst_data, dst_step);
+            else
+                temp.create(Size(width, height), dst_type);
+            crossCorr(src, kernel, temp, src.size(),
+                      CV_MAKETYPE(ddepth, src_channels),
+                      anchor, delta, borderType);
+            if (temp.data != dst_data)
+                temp.copyTo(dst);
+        }
+    }
+};
+
+struct OcvFilter : public hal::Filter2D
+{
+    Ptr<FilterEngine> f;
+    int src_type;
+    int dst_type;
+    bool isIsolated;
+
+    bool init(uchar* kernel_data, size_t kernel_step, int kernel_type, int kernel_width,
+              int kernel_height, int, int, int stype, int dtype, int borderType, double delta,
+              int anchor_x, int anchor_y, bool, bool)
+    {
+        isIsolated = (borderType & BORDER_ISOLATED) != 0;
+        src_type = stype;
+        dst_type = dtype;
+        int borderTypeValue = borderType & ~BORDER_ISOLATED;
+        Mat kernel = Mat(Size(kernel_width, kernel_height), kernel_type, kernel_data, kernel_step);
+        f = createLinearFilter(src_type, dst_type, kernel, Point(anchor_x, anchor_y), delta,
+                               borderTypeValue);
+        return true;
+    }
+    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step, int width, int height, int full_width, int full_height, int offset_x, int offset_y)
+    {
+        Mat src(Size(width, height), src_type, src_data, src_step);
+        Mat dst(Size(width, height), dst_type, dst_data, dst_step);
+        f->apply(src, dst, Size(full_width, full_height), Point(offset_x, offset_y));
+    }
+};
+
+
+struct ReplacementSepFilter : public hal::SepFilter2D
+{
+    cvhalFilter2D *ctx;
+    bool isInitialized;
+    ReplacementSepFilter() : ctx(0), isInitialized(false) {}
+    bool init(int stype, int dtype, int ktype,
+              uchar * kernelx_data, size_t kernelx_step, int kernelx_width, int kernelx_height,
+              uchar * kernely_data, size_t kernely_step, int kernely_width, int kernely_height,
+              int anchor_x, int anchor_y, double delta, int borderType)
+    {
+        int res = cv_hal_sepFilterInit(&ctx, stype, dtype, ktype,
+                                       kernelx_data, kernelx_step, kernelx_width, kernelx_height,
+                                       kernely_data, kernely_step, kernely_width, kernely_height,
+                                       anchor_x, anchor_y, delta, borderType);
+        isInitialized = (res == CV_HAL_ERROR_OK);
+        return isInitialized;
+    }
+    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
+             int width, int height, int full_width, int full_height,
+             int offset_x, int offset_y)
+    {
+        if (isInitialized)
+        {
+            int res = cv_hal_sepFilter(ctx, src_data, src_step, dst_data, dst_step, width, height, full_width, full_height, offset_x, offset_y);
+            if (res != CV_HAL_ERROR_OK)
+                CV_Error(Error::StsNotImplemented, "Failed to run HAL sepFilter implementation");
+        }
+    }
+    ~ReplacementSepFilter()
+    {
+        if (isInitialized)
+        {
+            int res = cv_hal_sepFilterFree(ctx);
+            if (res != CV_HAL_ERROR_OK)
+                CV_Error(Error::StsNotImplemented, "Failed to run HAL sepFilter implementation");
+        }
+    }
+};
+
+struct OcvSepFilter : public hal::SepFilter2D
+{
+    Ptr<FilterEngine> f;
+    int src_type;
+    int dst_type;
+    bool init(int stype, int dtype, int ktype,
+              uchar * kernelx_data, size_t kernelx_step, int kernelx_width, int kernelx_height,
+              uchar * kernely_data, size_t kernely_step, int kernely_width, int kernely_height,
+              int anchor_x, int anchor_y, double delta, int borderType)
+    {
+        src_type = stype;
+        dst_type = dtype;
+        Mat kernelX(Size(kernelx_width, kernelx_height), ktype, kernelx_data, kernelx_step);
+        Mat kernelY(Size(kernely_width, kernely_height), ktype, kernely_data, kernely_step);
+
+        f = createSeparableLinearFilter( stype, dtype, kernelX, kernelY,
+                                         Point(anchor_x, anchor_y),
+                                         delta, borderType & ~BORDER_ISOLATED );
+        return true;
+    }
+    void apply(uchar* src_data, size_t src_step, uchar* dst_data, size_t dst_step,
+             int width, int height, int full_width, int full_height,
+             int offset_x, int offset_y)
+    {
+        Mat src(Size(width, height), src_type, src_data, src_step);
+        Mat dst(Size(width, height), dst_type, dst_data, dst_step);
+        f->apply(src, dst, Size(full_width, full_height), Point(offset_x, offset_y));
+    }
+};
+
+//===================================================================
+//       HAL functions
+//===================================================================
+
+namespace cv {
+namespace hal {
+
+Ptr<hal::Filter2D> Filter2D::create(uchar* kernel_data, size_t kernel_step, int kernel_type,
+                                   int kernel_width, int kernel_height,
+                                   int max_width, int max_height,
+                                   int stype, int dtype,
+                                   int borderType, double delta, int anchor_x, int anchor_y, bool isSubmatrix, bool isInplace)
+{
+    {
+        ReplacementFilter* impl = new ReplacementFilter();
+        if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
+                       max_width, max_height, stype, dtype,
+                       borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
+        {
+            return Ptr<hal::Filter2D>(impl);
+        }
+        delete impl;
+    }
+
+#ifdef HAVE_IPP
+#if !HAVE_ICV
+    if (kernel_type == CV_32FC1) {
+        IppFilter<CV_32F>* impl = new IppFilter<CV_32F>();
+        if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
+                       max_width, max_height, stype, dtype,
+                       borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
+        {
+            return Ptr<hal::Filter2D>(impl);
+        }
+        delete impl;
+    }
+
+    if (kernel_type == CV_16SC1) {
+        IppFilter<CV_16S>* impl = new IppFilter<CV_16S>();
+        if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
+                       max_width, max_height, stype, dtype,
+                       borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
+        {
+            return Ptr<hal::Filter2D>(impl);
+        }
+        delete impl;
+    }
+#endif
+#endif
+
+    if (DftFilter::isAppropriate(stype, dtype, kernel_width, kernel_height))
+    {
+        DftFilter* impl = new DftFilter();
+        if (impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
+                       max_width, max_height, stype, dtype,
+                       borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace))
+        {
+            return Ptr<hal::Filter2D>(impl);
+        }
+        delete impl;
+    }
+
+    {
+        OcvFilter* impl = new OcvFilter();
+        impl->init(kernel_data, kernel_step, kernel_type, kernel_width, kernel_height,
+                   max_width, max_height, stype, dtype,
+                   borderType, delta, anchor_x, anchor_y, isSubmatrix, isInplace);
+        return Ptr<hal::Filter2D>(impl);
+    }
+}
+
+//---------------------------------------------------------------
+
+Ptr<SepFilter2D> SepFilter2D::create(int stype, int dtype, int ktype,
+                                     uchar * kernelx_data, size_t kernelx_step, int kernelx_width, int kernelx_height,
+                                     uchar * kernely_data, size_t kernely_step, int kernely_width, int kernely_height,
+                                     int anchor_x, int anchor_y, double delta, int borderType)
+{
+    {
+        ReplacementSepFilter * impl = new ReplacementSepFilter();
+        if (impl->init(stype, dtype, ktype,
+                       kernelx_data, kernelx_step, kernelx_width, kernelx_height,
+                       kernely_data, kernely_step, kernely_width, kernely_height,
+                       anchor_x, anchor_y, delta, borderType))
+        {
+            return Ptr<hal::SepFilter2D>(impl);
+        }
+        delete impl;
+    }
+    {
+        OcvSepFilter * impl = new OcvSepFilter();
+        impl->init(stype, dtype, ktype,
+                   kernelx_data, kernelx_step, kernelx_width, kernelx_height,
+                   kernely_data, kernely_step, kernely_width, kernely_height,
+                   anchor_x, anchor_y, delta, borderType);
+        return Ptr<hal::SepFilter2D>(impl);
+    }
+}
+
+} // cv::hal::
+} // cv::
+
+//================================================================
+//   Main interface
+//================================================================
+
 void cv::filter2D( InputArray _src, OutputArray _dst, int ddepth,
                    InputArray _kernel, Point anchor0,
                    double delta, int borderType )
@@ -3735,144 +5000,20 @@ void cv::filter2D( InputArray _src, OutputArray _dst, int ddepth,
     if( ddepth < 0 )
         ddepth = src.depth();
 
-#if CV_SSE2
-    int dft_filter_size = ((src.depth() == CV_8U && (ddepth == CV_8U || ddepth == CV_16S)) ||
-        (src.depth() == CV_32F && ddepth == CV_32F)) && checkHardwareSupport(CV_CPU_SSE3)? 130 : 50;
-#else
-    int dft_filter_size = 50;
-#endif
-
     _dst.create( src.size(), CV_MAKETYPE(ddepth, src.channels()) );
     Mat dst = _dst.getMat();
     Point anchor = normalizeAnchor(anchor0, kernel.size());
 
-#if IPP_VERSION_X100 > 0 && !defined HAVE_IPP_ICV_ONLY
-    CV_IPP_CHECK()
-    {
-        typedef IppStatus (CV_STDCALL * ippiFilterBorder)(const void * pSrc, int srcStep, void * pDst, int dstStep, IppiSize dstRoiSize,
-                                                          IppiBorderType border, const void * borderValue,
-                                                          const IppiFilterBorderSpec* pSpec, Ipp8u* pBuffer);
+    Point ofs;
+    Size wsz(src.cols, src.rows);
+    if( (borderType & BORDER_ISOLATED) == 0 )
+        src.locateROI( wsz, ofs );
 
-        int stype = src.type(), sdepth = CV_MAT_DEPTH(stype), cn = CV_MAT_CN(stype),
-                ktype = kernel.type(), kdepth = CV_MAT_DEPTH(ktype);
-        bool isolated = (borderType & BORDER_ISOLATED) != 0;
-        Point ippAnchor(kernel.cols >> 1, kernel.rows >> 1);
-        int borderTypeNI = borderType & ~BORDER_ISOLATED;
-        IppiBorderType ippBorderType = ippiGetBorderType(borderTypeNI);
-
-        if (borderTypeNI == BORDER_CONSTANT || borderTypeNI == BORDER_REPLICATE)
-        {
-            ippiFilterBorder ippFunc =
-                stype == CV_8UC1 ? (ippiFilterBorder)ippiFilterBorder_8u_C1R :
-                stype == CV_8UC3 ? (ippiFilterBorder)ippiFilterBorder_8u_C3R :
-                stype == CV_8UC4 ? (ippiFilterBorder)ippiFilterBorder_8u_C4R :
-                stype == CV_16UC1 ? (ippiFilterBorder)ippiFilterBorder_16u_C1R :
-                stype == CV_16UC3 ? (ippiFilterBorder)ippiFilterBorder_16u_C3R :
-                stype == CV_16UC4 ? (ippiFilterBorder)ippiFilterBorder_16u_C4R :
-                stype == CV_16SC1 ? (ippiFilterBorder)ippiFilterBorder_16s_C1R :
-                stype == CV_16SC3 ? (ippiFilterBorder)ippiFilterBorder_16s_C3R :
-                stype == CV_16SC4 ? (ippiFilterBorder)ippiFilterBorder_16s_C4R :
-                stype == CV_32FC1 ? (ippiFilterBorder)ippiFilterBorder_32f_C1R :
-                stype == CV_32FC3 ? (ippiFilterBorder)ippiFilterBorder_32f_C3R :
-                stype == CV_32FC4 ? (ippiFilterBorder)ippiFilterBorder_32f_C4R : 0;
-
-            if (sdepth == ddepth && (ktype == CV_16SC1 || ktype == CV_32FC1) &&
-                    ippFunc && (int)ippBorderType >= 0 && (!src.isSubmatrix() || isolated) &&
-                    std::fabs(delta - 0) < DBL_EPSILON && ippAnchor == anchor && dst.data != src.data)
-            {
-                IppiSize kernelSize = { kernel.cols, kernel.rows }, dstRoiSize = { dst.cols, dst.rows };
-                IppDataType dataType = ippiGetDataType(ddepth), kernelType = ippiGetDataType(kdepth);
-                Ipp32s specSize = 0, bufsize = 0;
-                IppStatus status = (IppStatus)-1;
-
-                if ((status = ippiFilterBorderGetSize(kernelSize, dstRoiSize, dataType, kernelType, cn, &specSize, &bufsize)) >= 0)
-                {
-                    IppiFilterBorderSpec * spec = (IppiFilterBorderSpec *)ippMalloc(specSize);
-                    Ipp8u * buffer = ippsMalloc_8u(bufsize);
-                    Ipp32f borderValue[4] = { 0, 0, 0, 0 };
-
-                    Mat reversedKernel;
-                    flip(kernel, reversedKernel, -1);
-
-                    if ((kdepth == CV_32F && (status = ippiFilterBorderInit_32f((const Ipp32f *)reversedKernel.data, kernelSize,
-                            dataType, cn, ippRndFinancial, spec)) >= 0 ) ||
-                        (kdepth == CV_16S && (status = ippiFilterBorderInit_16s((const Ipp16s *)reversedKernel.data,
-                            kernelSize, 0, dataType, cn, ippRndFinancial, spec)) >= 0))
-                    {
-                        status = ippFunc(src.data, (int)src.step, dst.data, (int)dst.step, dstRoiSize,
-                                         ippBorderType, borderValue, spec, buffer);
-                    }
-
-                    ippsFree(buffer);
-                    ippsFree(spec);
-                }
-
-                if (status >= 0)
-                {
-                    CV_IMPL_ADD(CV_IMPL_IPP);
-                    return;
-                }
-                setIppErrorStatus();
-            }
-        }
-    }
-#endif
-
-#ifdef HAVE_TEGRA_OPTIMIZATION
-    if( tegra::filter2D(src, dst, kernel, anchor, delta, borderType) )
-        return;
-#endif
-
-    if( kernel.cols*kernel.rows >= dft_filter_size )
-    {
-        Mat temp;
-        // crossCorr doesn't accept non-zero delta with multiple channels
-        if( src.channels() != 1 && delta != 0 )
-        {
-            // The semantics of filter2D require that the delta be applied
-            // as floating-point math.  So wee need an intermediate Mat
-            // with a float datatype.  If the dest is already floats,
-            // we just use that.
-            int corrDepth = dst.depth();
-            if( (dst.depth() == CV_32F || dst.depth() == CV_64F) &&
-                src.data != dst.data )
-            {
-                temp = dst;
-            }
-            else
-            {
-                corrDepth = dst.depth() == CV_64F ? CV_64F : CV_32F;
-                temp.create( dst.size(), CV_MAKETYPE(corrDepth, dst.channels()) );
-            }
-            crossCorr( src, kernel, temp, src.size(),
-                       CV_MAKETYPE(corrDepth, src.channels()),
-                       anchor, 0, borderType );
-            add( temp, delta, temp );
-            if ( temp.data != dst.data )
-            {
-                temp.convertTo( dst, dst.type() );
-            }
-        }
-        else
-        {
-            if( src.data != dst.data )
-                temp = dst;
-            else
-                temp.create(dst.size(), dst.type());
-            crossCorr( src, kernel, temp, src.size(),
-                       CV_MAKETYPE(ddepth, src.channels()),
-                       anchor, delta, borderType );
-            if( temp.data != dst.data )
-                temp.copyTo(dst);
-        }
-        return;
-    }
-
-    Ptr<FilterEngine> f = createLinearFilter(src.type(), dst.type(), kernel,
-                                             anchor, delta, borderType & ~BORDER_ISOLATED );
-    f->apply(src, dst, Rect(0,0,-1,-1), Point(), (borderType & BORDER_ISOLATED) != 0 );
+    Ptr<hal::Filter2D> c = hal::Filter2D::create(kernel.data, kernel.step, kernel.type(), kernel.cols, kernel.rows,
+                                                 dst.cols, dst.rows, src.type(), dst.type(),
+                                                 borderType, delta, anchor.x, anchor.y, src.isSubmatrix(), src.data == dst.data);
+    c->apply(src.data, src.step, dst.data, dst.step, dst.cols, dst.rows, wsz.width, wsz.height, ofs.x, ofs.y);
 }
-
 
 void cv::sepFilter2D( InputArray _src, OutputArray _dst, int ddepth,
                       InputArray _kernelX, InputArray _kernelY, Point anchor,
@@ -3889,9 +5030,18 @@ void cv::sepFilter2D( InputArray _src, OutputArray _dst, int ddepth,
     _dst.create( src.size(), CV_MAKETYPE(ddepth, src.channels()) );
     Mat dst = _dst.getMat();
 
-    Ptr<FilterEngine> f = createSeparableLinearFilter(src.type(),
-        dst.type(), kernelX, kernelY, anchor, delta, borderType & ~BORDER_ISOLATED );
-    f->apply(src, dst, Rect(0,0,-1,-1), Point(), (borderType & BORDER_ISOLATED) != 0 );
+    Point ofs;
+    Size wsz(src.cols, src.rows);
+    if( (borderType & BORDER_ISOLATED) == 0 )
+        src.locateROI( wsz, ofs );
+
+    CV_Assert(kernelX.type() == kernelY.type());
+
+    Ptr<hal::SepFilter2D> c = hal::SepFilter2D::create(src.type(), dst.type(), kernelX.type(),
+                                                       kernelX.data, kernelX.step, kernelX.cols, kernelX.rows,
+                                                       kernelY.data, kernelY.step, kernelY.cols, kernelY.rows,
+                                                       anchor.x, anchor.y, delta, borderType & ~BORDER_ISOLATED);
+    c->apply(src.data, src.step, dst.data, dst.step, dst.cols, dst.rows, wsz.width, wsz.height, ofs.x, ofs.y);
 }
 
 

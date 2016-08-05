@@ -12,6 +12,7 @@
 //
 // Copyright (C) 2000-2008, Intel Corporation, all rights reserved.
 // Copyright (C) 2009, Willow Garage Inc., all rights reserved.
+// Copyright (C) 2014, Itseez Inc., all rights reserved.
 // Third party copyrights are property of their respective owners.
 //
 // Redistribution and use in source and binary forms, with or without modification,
@@ -43,12 +44,101 @@
 #include "precomp.hpp"
 #include "opencl_kernels_imgproc.hpp"
 
-#if defined (HAVE_IPP) && (IPP_VERSION_MAJOR >= 7)
-static IppStatus sts = ippInit();
-#endif
-
 namespace cv
 {
+
+template <typename T, typename ST, typename QT>
+struct Integral_SIMD
+{
+    bool operator()(const T *, size_t,
+                    ST *, size_t,
+                    QT *, size_t,
+                    ST *, size_t,
+                    Size, int) const
+    {
+        return false;
+    }
+};
+
+#if CV_SSE2
+
+template <>
+struct Integral_SIMD<uchar, int, double>
+{
+    Integral_SIMD()
+    {
+        haveSSE2 = checkHardwareSupport(CV_CPU_SSE2);
+    }
+
+    bool operator()(const uchar * src, size_t _srcstep,
+                    int * sum, size_t _sumstep,
+                    double * sqsum, size_t,
+                    int * tilted, size_t,
+                    Size size, int cn) const
+    {
+        if (sqsum || tilted || cn != 1 || !haveSSE2)
+            return false;
+
+        // the first iteration
+        memset(sum, 0, (size.width + 1) * sizeof(int));
+
+        __m128i v_zero = _mm_setzero_si128(), prev = v_zero;
+        int j = 0;
+
+        // the others
+        for (int i = 0; i < size.height; ++i)
+        {
+            const uchar * src_row = src + _srcstep * i;
+            int * prev_sum_row = (int *)((uchar *)sum + _sumstep * i) + 1;
+            int * sum_row = (int *)((uchar *)sum + _sumstep * (i + 1)) + 1;
+
+            sum_row[-1] = 0;
+
+            prev = v_zero;
+            j = 0;
+
+            for ( ; j + 7 < size.width; j += 8)
+            {
+                __m128i vsuml = _mm_loadu_si128((const __m128i *)(prev_sum_row + j));
+                __m128i vsumh = _mm_loadu_si128((const __m128i *)(prev_sum_row + j + 4));
+
+                __m128i el8shr0 = _mm_loadl_epi64((const __m128i *)(src_row + j));
+                __m128i el8shr1 = _mm_slli_si128(el8shr0, 1);
+                __m128i el8shr2 = _mm_slli_si128(el8shr0, 2);
+                __m128i el8shr3 = _mm_slli_si128(el8shr0, 3);
+
+                vsuml = _mm_add_epi32(vsuml, prev);
+                vsumh = _mm_add_epi32(vsumh, prev);
+
+                __m128i el8shr12 = _mm_add_epi16(_mm_unpacklo_epi8(el8shr1, v_zero),
+                                                 _mm_unpacklo_epi8(el8shr2, v_zero));
+                __m128i el8shr03 = _mm_add_epi16(_mm_unpacklo_epi8(el8shr0, v_zero),
+                                                 _mm_unpacklo_epi8(el8shr3, v_zero));
+                __m128i el8 = _mm_add_epi16(el8shr12, el8shr03);
+
+                __m128i el4h = _mm_add_epi16(_mm_unpackhi_epi16(el8, v_zero),
+                                             _mm_unpacklo_epi16(el8, v_zero));
+
+                vsuml = _mm_add_epi32(vsuml, _mm_unpacklo_epi16(el8, v_zero));
+                vsumh = _mm_add_epi32(vsumh, el4h);
+
+                _mm_storeu_si128((__m128i *)(sum_row + j), vsuml);
+                _mm_storeu_si128((__m128i *)(sum_row + j + 4), vsumh);
+
+                prev = _mm_add_epi32(prev, _mm_shuffle_epi32(el4h, _MM_SHUFFLE(3, 3, 3, 3)));
+            }
+
+            for (int v = sum_row[j - 1] - prev_sum_row[j - 1]; j < size.width; ++j)
+                sum_row[j] = (v += src_row[j]) + prev_sum_row[j];
+        }
+
+        return true;
+    }
+
+    bool haveSSE2;
+};
+
+#endif
 
 template<typename T, typename ST, typename QT>
 void integral_( const T* src, size_t _srcstep, ST* sum, size_t _sumstep,
@@ -56,6 +146,13 @@ void integral_( const T* src, size_t _srcstep, ST* sum, size_t _sumstep,
                 Size size, int cn )
 {
     int x, y, k;
+
+    if (Integral_SIMD<T, ST, QT>()(src, _srcstep,
+                                   sum, _sumstep,
+                                   sqsum, _sqsumstep,
+                                   tilted, _tiltedstep,
+                                   size, cn))
+        return;
 
     int srcstep = (int)(_srcstep/sizeof(T));
     int sumstep = (int)(_sumstep/sizeof(ST));
@@ -217,6 +314,7 @@ static void integral_##suffix( T* src, size_t srcstep, ST* sum, size_t sumstep, 
 { integral_(src, srcstep, sum, sumstep, sqsum, sqsumstep, tilted, tiltedstep, size, cn); }
 
 DEF_INTEGRAL_FUNC(8u32s, uchar, int, double)
+DEF_INTEGRAL_FUNC(8u32s32s, uchar, int, int)
 DEF_INTEGRAL_FUNC(8u32f64f, uchar, float, double)
 DEF_INTEGRAL_FUNC(8u64f64f, uchar, double, double)
 DEF_INTEGRAL_FUNC(16u64f64f, ushort, double, double)
@@ -322,6 +420,69 @@ static bool ocl_integral( InputArray _src, OutputArray _sum, OutputArray _sqsum,
 
 }
 
+#if defined(HAVE_IPP)
+namespace cv
+{
+static bool ipp_integral(InputArray _src, OutputArray _sum, OutputArray _sqsum, OutputArray _tilted, int sdepth, int sqdepth)
+{
+#if !defined(HAVE_IPP_ICV_ONLY) && (IPP_VERSION_X100 != 900) // Disabled on ICV due invalid results
+    int type = _src.type(), depth = CV_MAT_DEPTH(type), cn = CV_MAT_CN(type);
+    if( sdepth <= 0 )
+        sdepth = depth == CV_8U ? CV_32S : CV_64F;
+    if ( sqdepth <= 0 )
+         sqdepth = CV_64F;
+    sdepth = CV_MAT_DEPTH(sdepth), sqdepth = CV_MAT_DEPTH(sqdepth);
+
+
+    Size ssize = _src.size(), isize(ssize.width + 1, ssize.height + 1);
+    _sum.create( isize, CV_MAKETYPE(sdepth, cn) );
+    Mat src = _src.getMat(), sum =_sum.getMat(), sqsum, tilted;
+
+    if( _sqsum.needed() )
+    {
+        _sqsum.create( isize, CV_MAKETYPE(sqdepth, cn) );
+        sqsum = _sqsum.getMat();
+    };
+
+    if( ( depth == CV_8U ) && ( sdepth == CV_32F || sdepth == CV_32S ) && ( !_tilted.needed() ) && ( !_sqsum.needed() || sqdepth == CV_64F ) && ( cn == 1 ) )
+    {
+        IppStatus status = ippStsErr;
+        IppiSize srcRoiSize = ippiSize( src.cols, src.rows );
+        if( sdepth == CV_32F )
+        {
+            if( _sqsum.needed() )
+            {
+                status = ippiSqrIntegral_8u32f64f_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32f*)sum.data, (int)sum.step, (Ipp64f*)sqsum.data, (int)sqsum.step, srcRoiSize, 0, 0 );
+            }
+            else
+            {
+                status = ippiIntegral_8u32f_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32f*)sum.data, (int)sum.step, srcRoiSize, 0 );
+            }
+        }
+        else if( sdepth == CV_32S )
+        {
+            if( _sqsum.needed() )
+            {
+                status = ippiSqrIntegral_8u32s64f_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32s*)sum.data, (int)sum.step, (Ipp64f*)sqsum.data, (int)sqsum.step, srcRoiSize, 0, 0 );
+            }
+            else
+            {
+                status = ippiIntegral_8u32s_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32s*)sum.data, (int)sum.step, srcRoiSize, 0 );
+            }
+        }
+        if (0 <= status)
+        {
+            CV_IMPL_ADD(CV_IMPL_IPP);
+            return true;
+        }
+    }
+#else
+    CV_UNUSED(_src); CV_UNUSED(_sum); CV_UNUSED(_sqsum); CV_UNUSED(_tilted); CV_UNUSED(sdepth); CV_UNUSED(sqdepth);
+#endif
+    return false;
+}
+}
+#endif
 
 void cv::integral( InputArray _src, OutputArray _sum, OutputArray _sqsum, OutputArray _tilted, int sdepth, int sqdepth )
 {
@@ -354,44 +515,9 @@ void cv::integral( InputArray _src, OutputArray _sum, OutputArray _sqsum, Output
         sqsum = _sqsum.getMat();
     };
 
-#if defined(HAVE_IPP) && !defined(HAVE_IPP_ICV_ONLY) // Disabled on ICV due invalid results
-    CV_IPP_CHECK()
-    {
-        if( ( depth == CV_8U ) && ( sdepth == CV_32F || sdepth == CV_32S ) && ( !_tilted.needed() ) && ( !_sqsum.needed() || sqdepth == CV_64F ) && ( cn == 1 ) )
-        {
-            IppStatus status = ippStsErr;
-            IppiSize srcRoiSize = ippiSize( src.cols, src.rows );
-            if( sdepth == CV_32F )
-            {
-                if( _sqsum.needed() )
-                {
-                    status = ippiSqrIntegral_8u32f64f_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32f*)sum.data, (int)sum.step, (Ipp64f*)sqsum.data, (int)sqsum.step, srcRoiSize, 0, 0 );
-                }
-                else
-                {
-                    status = ippiIntegral_8u32f_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32f*)sum.data, (int)sum.step, srcRoiSize, 0 );
-                }
-            }
-            else if( sdepth == CV_32S )
-            {
-                if( _sqsum.needed() )
-                {
-                    status = ippiSqrIntegral_8u32s64f_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32s*)sum.data, (int)sum.step, (Ipp64f*)sqsum.data, (int)sqsum.step, srcRoiSize, 0, 0 );
-                }
-                else
-                {
-                    status = ippiIntegral_8u32s_C1R( (const Ipp8u*)src.data, (int)src.step, (Ipp32s*)sum.data, (int)sum.step, srcRoiSize, 0 );
-                }
-            }
-            if (0 <= status)
-            {
-                CV_IMPL_ADD(CV_IMPL_IPP);
-                return;
-            }
-            setIppErrorStatus();
-        }
-    }
-#endif
+    CV_IPP_RUN(( depth == CV_8U ) && ( sdepth == CV_32F || sdepth == CV_32S ) &&
+        ( !_tilted.needed() ) && ( !_sqsum.needed() || sqdepth == CV_64F ) && ( cn == 1 ),
+        ipp_integral(_src, _sum, _sqsum, _tilted, sdepth, sqdepth));
 
     if( _tilted.needed() )
     {
@@ -404,6 +530,8 @@ void cv::integral( InputArray _src, OutputArray _sum, OutputArray _sqsum, Output
         func = (IntegralFunc)GET_OPTIMIZED(integral_8u32s);
     else if( depth == CV_8U && sdepth == CV_32S && sqdepth == CV_32F )
         func = (IntegralFunc)integral_8u32s32f;
+    else if( depth == CV_8U && sdepth == CV_32S && sqdepth == CV_32S )
+        func = (IntegralFunc)integral_8u32s32s;
     else if( depth == CV_8U && sdepth == CV_32F && sqdepth == CV_64F )
         func = (IntegralFunc)integral_8u32f64f;
     else if( depth == CV_8U && sdepth == CV_32F && sqdepth == CV_32F )
